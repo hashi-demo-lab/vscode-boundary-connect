@@ -59,9 +59,20 @@ export class TargetProvider implements ITargetProvider {
       logger.error('Failed to fetch targets:', err);
 
       if (isAuthRequired(err)) {
+        logger.info('Auth required - clearing auth state and prompting re-login');
         this.authenticated = false;
         this.error = undefined;
-        void vscode.commands.executeCommand('setContext', 'boundary.authenticated', false);
+        this.targets = [];
+        await vscode.commands.executeCommand('setContext', 'boundary.authenticated', false);
+
+        // Prompt user to re-login
+        const action = await vscode.window.showWarningMessage(
+          'Your Boundary session has expired. Please sign in again.',
+          'Sign In'
+        );
+        if (action === 'Sign In') {
+          void vscode.commands.executeCommand('boundary.login');
+        }
       } else {
         this.error = err instanceof Error ? err.message : 'Failed to fetch targets';
       }

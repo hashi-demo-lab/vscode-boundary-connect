@@ -275,6 +275,62 @@ export function createMockSpawn(): EventEmitter & {
   return process;
 }
 
+// Mock auth methods response
+export const mockAuthMethodsResponse = {
+  status_code: 200,
+  items: [
+    {
+      id: 'amoidc_1234567890',
+      scope_id: 'global',
+      name: 'Okta SSO',
+      description: 'Sign in with Okta',
+      type: 'oidc' as const,
+      is_primary: true,
+      created_time: '2024-01-01T00:00:00Z',
+      updated_time: '2024-01-01T00:00:00Z',
+    },
+    {
+      id: 'ampw_1234567890',
+      scope_id: 'global',
+      name: 'Password',
+      description: 'Username and password authentication',
+      type: 'password' as const,
+      is_primary: false,
+      created_time: '2024-01-01T00:00:00Z',
+      updated_time: '2024-01-01T00:00:00Z',
+    },
+  ],
+};
+
+export const mockAuthMethodsResponseSingleOidc = {
+  status_code: 200,
+  items: [
+    {
+      id: 'amoidc_keycloak123',
+      scope_id: 'global',
+      name: 'Keycloak',
+      description: 'Keycloak OIDC authentication',
+      type: 'oidc' as const,
+      is_primary: true,
+      created_time: '2024-01-01T00:00:00Z',
+      updated_time: '2024-01-01T00:00:00Z',
+    },
+  ],
+};
+
+export const mockAuthMethodsResponseEmpty = {
+  status_code: 200,
+  items: [],
+};
+
+export const mockAuthMethodsResponseError = {
+  status_code: 401,
+  error: {
+    kind: 'Unauthorized',
+    message: 'Not authenticated',
+  },
+};
+
 // Mock boundary CLI responses for JSON parsing
 export const mockBoundaryResponses = {
   authenticate: {
@@ -283,6 +339,7 @@ export const mockBoundaryResponses = {
     account_id: 'acctpw_1234567890',
     auth_method_id: 'ampw_1234567890',
   },
+  listAuthMethods: mockAuthMethodsResponse,
   listTargets: {
     items: [
       {

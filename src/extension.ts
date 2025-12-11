@@ -145,10 +145,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  * Register all extension commands
  */
 function registerCommands(context: vscode.ExtensionContext): void {
-  // Login command
+  // Login command - uses smart auto-discovery
   context.subscriptions.push(
     vscode.commands.registerCommand('boundary.login', async () => {
-      logger.debug('boundary.login command invoked');
+      logger.info('boundary.login command invoked');
+      // Use OIDC auth with auto-discovery - it will find available methods
+      // and handle fallbacks automatically
+      await executeOidcAuth(authManager);
+    })
+  );
+
+  // Legacy login with method picker (for users who want to choose)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('boundary.loginWithPicker', async () => {
+      logger.debug('boundary.loginWithPicker command invoked');
       const method = await showAuthMethodPicker();
       if (!method) {
         logger.debug('No auth method selected');

@@ -1,5 +1,4 @@
 {
-  "boundary.cliPath": "/workspace/boundary",
   "boundary.addr": "https://boundary.local",
   "boundary.tlsInsecure": true,
   "boundary.keyringType": "none",

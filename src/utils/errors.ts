@@ -132,6 +132,24 @@ export function isErrorCode(error: unknown, code: BoundaryErrorCode): boolean {
  * Check if error indicates authentication is required
  */
 export function isAuthRequired(error: unknown): boolean {
-  return isErrorCode(error, BoundaryErrorCode.AUTH_FAILED) ||
-         isErrorCode(error, BoundaryErrorCode.TOKEN_EXPIRED);
+  if (isErrorCode(error, BoundaryErrorCode.AUTH_FAILED) ||
+      isErrorCode(error, BoundaryErrorCode.TOKEN_EXPIRED)) {
+    return true;
+  }
+
+  // Also check for 401/403 status codes in the error message
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    if (message.includes('401') ||
+        message.includes('403') ||
+        message.includes('unauthenticated') ||
+        message.includes('unauthorized') ||
+        message.includes('forbidden') ||
+        message.includes('permission denied') ||
+        message.includes('permissiondenied')) {
+      return true;
+    }
+  }
+
+  return false;
 }

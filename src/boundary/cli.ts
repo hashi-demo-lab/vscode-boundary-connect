@@ -79,6 +79,7 @@ export class BoundaryCLI implements IBoundaryCLI {
 
   /**
    * Ensure CLI path is resolved before use
+   * Always tries to verify the path works, falls back to auto-discovery
    */
   private async ensureCliPath(): Promise<void> {
     if (this.cliPathResolved) {
@@ -86,17 +87,28 @@ export class BoundaryCLI implements IBoundaryCLI {
     }
 
     const configuredPath = getConfigurationService().get('cliPath');
+    logger.debug(`Configured CLI path: ${configuredPath}`);
 
-    // If user set a custom path, use it directly
+    // If user set a custom path, verify it works first
     if (configuredPath && configuredPath !== 'boundary') {
-      this.cliPathResolved = true;
-      return;
+      try {
+        logger.debug(`Verifying configured path: ${configuredPath}`);
+        await execAsync(`"${configuredPath}" version`, { timeout: 5000 });
+        logger.info(`Using configured CLI path: ${configuredPath}`);
+        this.cliPathResolved = true;
+        return;
+      } catch (err) {
+        logger.warn(`Configured CLI path '${configuredPath}' not found, trying auto-discovery...`);
+      }
     }
 
-    // Try to find CLI in common paths
+    // Try to find CLI in common paths (auto-discovery)
     const foundPath = await this.findCliPath();
     if (foundPath) {
       this.resolvedCliPath = foundPath;
+      logger.info(`Auto-discovered CLI at: ${foundPath}`);
+    } else {
+      logger.warn('CLI not found in any common paths');
     }
     this.cliPathResolved = true;
   }
@@ -131,11 +143,14 @@ export class BoundaryCLI implements IBoundaryCLI {
 
   async checkInstalled(): Promise<boolean> {
     // Ensure we've resolved the CLI path first
+    logger.info('Resolving CLI path...');
     await this.ensureCliPath();
+    logger.info(`CLI path resolved to: ${this.cliPath}`);
 
     // Now try to execute with the resolved path
     try {
-      await this.execute(['version']);
+      const result = await this.execute(['version'], 10000); // 10s timeout for version check
+      logger.info(`CLI version check succeeded: ${result.stdout.substring(0, 100)}`);
       return true;
     } catch (err) {
       logger.error('CLI check failed:', err);
@@ -351,14 +366,19 @@ export class BoundaryCLI implements IBoundaryCLI {
   /**
    * Execute a Boundary CLI command
    */
-  private async execute(args: string[]): Promise<CLIExecutionResult> {
-    const command = `"${this.cliPath}" ${args.map(a => `"${a}"`).join(' ')}`;
-    logger.debug(`Executing: ${this.cliPath} ${args.join(' ')}`);
+  private async execute(args: string[], timeoutMs = 30000): Promise<CLIExecutionResult> {
+    const cliPath = this.cliPath;
+    const command = `"${cliPath}" ${args.map(a => `"${a}"`).join(' ')}`;
+    const env = this.getCliEnv();
+
+    logger.debug(`Executing: ${cliPath} ${args.join(' ')}`);
+    logger.debug(`Environment: BOUNDARY_ADDR=${env.BOUNDARY_ADDR}, BOUNDARY_TLS_INSECURE=${env.BOUNDARY_TLS_INSECURE}`);
 
     try {
       const { stdout, stderr } = await execAsync(command, {
-        env: this.getCliEnv(),
+        env,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+        timeout: timeoutMs,
       });
 
       return {

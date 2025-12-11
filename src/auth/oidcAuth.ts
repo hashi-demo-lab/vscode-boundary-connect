@@ -114,6 +114,37 @@ async function ensureBoundaryAddress(): Promise<boolean> {
   // Save to settings
   await config.update('addr', inputAddr, vscode.ConfigurationTarget.Global);
   logger.info(`Boundary address configured: ${inputAddr}`);
+
+  // For HTTPS addresses, ask about TLS verification (many dev/internal deployments use self-signed certs)
+  if (inputAddr.startsWith('https://') && !inputAddr.includes('boundaryproject.io')) {
+    const tlsChoice = await vscode.window.showQuickPick(
+      [
+        {
+          label: '$(shield) Verify TLS Certificate',
+          description: 'Recommended for production',
+          detail: 'Requires a valid, trusted certificate',
+          value: false,
+        },
+        {
+          label: '$(unlock) Skip TLS Verification',
+          description: 'For development/self-signed certs',
+          detail: 'Use this if your server uses a self-signed certificate',
+          value: true,
+        },
+      ],
+      {
+        placeHolder: 'Does your Boundary server use a self-signed certificate?',
+        title: 'TLS Certificate Verification',
+        ignoreFocusOut: true,
+      }
+    );
+
+    if (tlsChoice?.value) {
+      await config.update('tlsInsecure', true, vscode.ConfigurationTarget.Global);
+      logger.info('TLS verification disabled for self-signed certificate');
+    }
+  }
+
   return true;
 }
 
@@ -129,13 +160,17 @@ export async function executeOidcAuth(
   const cli = getBoundaryCLI();
 
   // Check CLI availability first
+  logger.info('Checking CLI installation...');
   const installed = await cli.checkInstalled();
   if (!installed) {
+    logger.error('CLI not installed');
+    void vscode.window.showErrorMessage('Boundary CLI not found. Please install it.');
     return {
       success: false,
       error: 'Boundary CLI not found. Please install it from https://developer.hashicorp.com/boundary/downloads',
     };
   }
+  logger.info('CLI is installed');
 
   // Ensure Boundary address is configured
   const hasAddress = await ensureBoundaryAddress();
@@ -143,24 +178,59 @@ export async function executeOidcAuth(
     return { success: false, error: 'Boundary server address is required' };
   }
 
+  const config = getConfigurationService();
+  logger.info(`Using Boundary address: ${config.get('addr')}, TLS insecure: ${config.get('tlsInsecure')}`);
+
   let authMethodId = options.authMethodId;
 
   // If no auth method specified, discover available methods
   if (!authMethodId) {
+    logger.info('Discovering auth methods...');
+
     // Show progress while discovering auth methods
-    const authMethods = await vscode.window.withProgress(
+    let authMethods = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title: 'Discovering sign-in options...',
         cancellable: false,
       },
       async () => {
-        return cli.listAuthMethods();
+        try {
+          const methods = await cli.listAuthMethods();
+          logger.info(`Discovered ${methods.length} auth methods`);
+          return methods;
+        } catch (err) {
+          logger.error('Auth method discovery failed:', err);
+          return [];
+        }
       }
     );
 
+    // If discovery failed and TLS is not disabled, offer to disable it
     if (authMethods.length === 0) {
-      // Fall back to manual entry if discovery fails
+      const config = getConfigurationService();
+      const addr = config.get('addr');
+      const tlsInsecure = config.get('tlsInsecure');
+
+      if (addr?.startsWith('https://') && !tlsInsecure) {
+        const retry = await vscode.window.showWarningMessage(
+          'Could not connect to Boundary server. This may be due to a self-signed certificate.',
+          'Skip TLS Verification',
+          'Cancel'
+        );
+
+        if (retry === 'Skip TLS Verification') {
+          await config.update('tlsInsecure', true, vscode.ConfigurationTarget.Global);
+          logger.info('TLS verification disabled, retrying...');
+
+          // Retry discovery
+          authMethods = await cli.listAuthMethods();
+        }
+      }
+    }
+
+    if (authMethods.length === 0) {
+      // Fall back to manual entry if discovery still fails
       logger.warn('No auth methods discovered, falling back to manual entry');
       return executeManualOidcAuth(authManager);
     }

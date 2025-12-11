@@ -4,12 +4,19 @@
 
 import {
   extractPort,
+  parseAuthMethodsResponse,
   parseAuthResponse,
   parseScopesResponse,
   parseTargetsResponse,
   PORT_REGEX,
 } from '../../../src/boundary/parser';
-import { mockBoundaryResponses } from '../../mocks/boundary';
+import {
+  mockBoundaryResponses,
+  mockAuthMethodsResponse,
+  mockAuthMethodsResponseSingleOidc,
+  mockAuthMethodsResponseEmpty,
+  mockAuthMethodsResponseError,
+} from '../../mocks/boundary';
 
 describe('Boundary Parser', () => {
   describe('PORT_REGEX', () => {
@@ -185,6 +192,87 @@ describe('Boundary Parser', () => {
 
     it('should throw on invalid JSON', () => {
       expect(() => parseScopesResponse('invalid')).toThrow();
+    });
+  });
+
+  describe('parseAuthMethodsResponse', () => {
+    it('should parse valid auth methods list response', () => {
+      const json = JSON.stringify(mockAuthMethodsResponse);
+      const result = parseAuthMethodsResponse(json);
+
+      expect(result).toBeInstanceOf(Array);
+      expect(result.length).toBe(2);
+      expect(result[0]).toHaveProperty('id', 'amoidc_1234567890');
+      expect(result[0]).toHaveProperty('name', 'Okta SSO');
+      expect(result[0]).toHaveProperty('type', 'oidc');
+      expect(result[0]).toHaveProperty('isPrimary', true);
+    });
+
+    it('should parse single OIDC method response', () => {
+      const json = JSON.stringify(mockAuthMethodsResponseSingleOidc);
+      const result = parseAuthMethodsResponse(json);
+
+      expect(result).toBeInstanceOf(Array);
+      expect(result.length).toBe(1);
+      expect(result[0].id).toBe('amoidc_keycloak123');
+      expect(result[0].name).toBe('Keycloak');
+      expect(result[0].type).toBe('oidc');
+    });
+
+    it('should handle empty items array', () => {
+      const json = JSON.stringify(mockAuthMethodsResponseEmpty);
+      const result = parseAuthMethodsResponse(json);
+
+      expect(result).toEqual([]);
+    });
+
+    it('should throw on error response', () => {
+      const json = JSON.stringify(mockAuthMethodsResponseError);
+      expect(() => parseAuthMethodsResponse(json)).toThrow();
+    });
+
+    it('should throw on invalid JSON', () => {
+      expect(() => parseAuthMethodsResponse('invalid json')).toThrow();
+    });
+
+    it('should parse auth method with all fields', () => {
+      const json = JSON.stringify(mockAuthMethodsResponse);
+      const result = parseAuthMethodsResponse(json);
+
+      // Check OIDC method
+      const oidcMethod = result.find(m => m.type === 'oidc');
+      expect(oidcMethod).toBeDefined();
+      expect(oidcMethod!.id).toBe('amoidc_1234567890');
+      expect(oidcMethod!.scopeId).toBe('global');
+      expect(oidcMethod!.name).toBe('Okta SSO');
+      expect(oidcMethod!.description).toBe('Sign in with Okta');
+      expect(oidcMethod!.isPrimary).toBe(true);
+      expect(oidcMethod!.createdTime).toBeInstanceOf(Date);
+      expect(oidcMethod!.updatedTime).toBeInstanceOf(Date);
+
+      // Check password method
+      const pwdMethod = result.find(m => m.type === 'password');
+      expect(pwdMethod).toBeDefined();
+      expect(pwdMethod!.id).toBe('ampw_1234567890');
+      expect(pwdMethod!.isPrimary).toBe(false);
+    });
+
+    it('should provide default name for auth methods without names', () => {
+      const response = {
+        status_code: 200,
+        items: [
+          {
+            id: 'amoidc_noname',
+            scope_id: 'global',
+            type: 'oidc',
+            is_primary: false,
+          },
+        ],
+      };
+      const json = JSON.stringify(response);
+      const result = parseAuthMethodsResponse(json);
+
+      expect(result[0].name).toBe('Single Sign-On (OIDC)');
     });
   });
 });

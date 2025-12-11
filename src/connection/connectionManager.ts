@@ -22,6 +22,17 @@ export class ConnectionManager implements IConnectionManager {
 
     const cli = getBoundaryCLI();
 
+    // For SSH targets without credential injection, prompt for username
+    let userName: string | undefined;
+    if (target.type === 'ssh' || target.type === 'tcp') {
+      // Try to get username from user
+      userName = await this.promptForUsername(target);
+      if (userName === undefined) {
+        // User cancelled
+        throw new Error('Connection cancelled');
+      }
+    }
+
     // Spawn boundary connect
     const connection = await cli.connect(target.id);
 
@@ -42,22 +53,78 @@ export class ConnectionManager implements IConnectionManager {
     // Notify listeners
     this._onSessionsChanged.fire(this.getActiveSessions());
 
-    // Trigger Remote SSH connection
-    try {
-      await triggerRemoteSSH({
-        host: session.localHost,
-        port: session.localPort,
-      });
-    } catch (error) {
-      logger.error('Failed to trigger Remote SSH:', error);
-      // Don't fail the connection, user can manually connect
-      void vscode.window.showWarningMessage(
-        `Connected to ${target.name} on port ${session.localPort}. ` +
-        'Failed to open Remote SSH automatically. You can connect manually using Remote SSH.'
+    // Trigger Remote SSH connection for SSH-type targets
+    if (target.type === 'ssh' || target.type === 'tcp') {
+      try {
+        await triggerRemoteSSH({
+          host: session.localHost,
+          port: session.localPort,
+          userName: userName || undefined,
+        });
+      } catch (error) {
+        logger.error('Failed to trigger Remote SSH:', error);
+        // Don't fail the connection, user can manually connect
+        void vscode.window.showInformationMessage(
+          `Connected to ${target.name} on localhost:${session.localPort}. ` +
+          `Use SSH: ssh ${userName ? userName + '@' : ''}localhost -p ${session.localPort}`,
+          'Copy Command'
+        ).then(action => {
+          if (action === 'Copy Command') {
+            const cmd = `ssh ${userName ? userName + '@' : ''}localhost -p ${session.localPort}`;
+            void vscode.env.clipboard.writeText(cmd);
+          }
+        });
+      }
+    } else {
+      // For non-SSH targets (like databases), show connection info
+      void vscode.window.showInformationMessage(
+        `Connected to ${target.name} on localhost:${session.localPort}`
       );
     }
 
     return session;
+  }
+
+  /**
+   * Prompt user for SSH username
+   */
+  private async promptForUsername(target: BoundaryTarget): Promise<string | undefined> {
+    // Check if we have a saved username for this target
+    const savedUserName = this.getSavedUsername(target.id);
+
+    const userName = await vscode.window.showInputBox({
+      prompt: `Enter SSH username for ${target.name}`,
+      placeHolder: 'e.g., ubuntu, ec2-user, admin',
+      value: savedUserName,
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        if (!value || value.trim().length === 0) {
+          return 'Username is required for SSH connection';
+        }
+        if (value.includes(' ')) {
+          return 'Username cannot contain spaces';
+        }
+        return undefined;
+      },
+    });
+
+    if (userName) {
+      // Save for next time
+      this.saveUsername(target.id, userName);
+    }
+
+    return userName;
+  }
+
+  // Simple in-memory username cache (could be persisted later)
+  private usernameCache: Map<string, string> = new Map();
+
+  private getSavedUsername(targetId: string): string | undefined {
+    return this.usernameCache.get(targetId);
+  }
+
+  private saveUsername(targetId: string, userName: string): void {
+    this.usernameCache.set(targetId, userName);
   }
 
   async disconnect(sessionId: string): Promise<void> {
