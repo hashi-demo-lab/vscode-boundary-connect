@@ -3,7 +3,7 @@
  */
 
 import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
-import { AuthResult, BoundaryScope, BoundaryTarget, SessionAuthorization } from '../types';
+import { AuthResult, BoundaryAuthMethod, BoundaryScope, BoundaryTarget, SessionAuthorization } from '../types';
 
 // Regex patterns for parsing CLI output
 // Matches both old format: "Proxy listening on 127.0.0.1:PORT"
@@ -91,6 +91,60 @@ export function parseAuthResponse(output: string): AuthResult {
     userId: item.user_id,
     expirationTime: item.expiration_time ? new Date(item.expiration_time) : undefined,
   };
+}
+
+/**
+ * Parse auth methods list response
+ */
+interface AuthMethodResponseItem {
+  id: string;
+  scope_id: string;
+  name: string;
+  description?: string;
+  type: 'oidc' | 'password' | 'ldap';
+  is_primary: boolean;
+  created_time?: string;
+  updated_time?: string;
+}
+
+export function parseAuthMethodsResponse(output: string): BoundaryAuthMethod[] {
+  const response = parseJsonResponse<BoundaryApiResponse<AuthMethodResponseItem>>(output);
+
+  if (isErrorResponse(response)) {
+    throw new BoundaryError(
+      getErrorMessage(response),
+      BoundaryErrorCode.CLI_EXECUTION_FAILED,
+      response
+    );
+  }
+
+  const items = response.items || [];
+  return items.map(item => ({
+    id: item.id,
+    scopeId: item.scope_id,
+    name: item.name || getDefaultAuthMethodName(item.type),
+    description: item.description,
+    type: item.type,
+    isPrimary: item.is_primary || false,
+    createdTime: item.created_time ? new Date(item.created_time) : undefined,
+    updatedTime: item.updated_time ? new Date(item.updated_time) : undefined,
+  }));
+}
+
+/**
+ * Get a friendly default name for auth methods without names
+ */
+function getDefaultAuthMethodName(type: string): string {
+  switch (type) {
+    case 'oidc':
+      return 'Single Sign-On (OIDC)';
+    case 'password':
+      return 'Username & Password';
+    case 'ldap':
+      return 'LDAP';
+    default:
+      return type.toUpperCase();
+  }
 }
 
 /**

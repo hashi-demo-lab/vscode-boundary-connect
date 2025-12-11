@@ -23,6 +23,21 @@ export interface OidcCredentials {
 
 export type Credentials = PasswordCredentials | OidcCredentials;
 
+// ============================================================================
+// Auth Method Discovery Types
+// ============================================================================
+
+export interface BoundaryAuthMethod {
+  id: string;
+  scopeId: string;
+  name: string;
+  description?: string;
+  type: 'oidc' | 'password' | 'ldap';
+  isPrimary: boolean;
+  createdTime?: Date;
+  updatedTime?: Date;
+}
+
 export interface AuthResult {
   success: boolean;
   token?: string;
@@ -105,6 +120,7 @@ export interface IBoundaryCLI extends vscode.Disposable {
   getVersion(): Promise<string | undefined>;
   authenticate(method: AuthMethod, credentials?: Credentials): Promise<AuthResult>;
   getToken(): Promise<string | undefined>;
+  listAuthMethods(scopeId?: string): Promise<BoundaryAuthMethod[]>;
   listTargets(scopeId?: string, recursive?: boolean): Promise<BoundaryTarget[]>;
   listScopes(parentScopeId?: string): Promise<BoundaryScope[]>;
   authorizeSession(targetId: string): Promise<SessionAuthorization>;

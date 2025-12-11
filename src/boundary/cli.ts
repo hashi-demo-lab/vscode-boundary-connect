@@ -7,6 +7,7 @@ import { promisify } from 'util';
 import {
   AuthMethod,
   AuthResult,
+  BoundaryAuthMethod,
   BoundaryScope,
   BoundaryTarget,
   CLIExecutionResult,
@@ -23,6 +24,7 @@ import { getConfigurationService } from '../utils/config';
 import {
   extractPort,
   extractVersion,
+  parseAuthMethodsResponse,
   parseAuthResponse,
   parseScopesResponse,
   parseSessionAuthResponse,
@@ -33,11 +35,70 @@ const execAsync = promisify(exec);
 
 const CONNECT_TIMEOUT_MS = 30000; // 30 seconds to capture port
 
+// Common installation paths for Boundary CLI (absolute paths first for reliability)
+const COMMON_CLI_PATHS = [
+  '/opt/homebrew/bin/boundary', // macOS Homebrew (Apple Silicon)
+  '/usr/local/bin/boundary', // macOS Homebrew (Intel) / Linux
+  '/usr/bin/boundary', // Linux system
+  '/snap/bin/boundary', // Linux snap
+  'boundary', // PATH lookup (last resort)
+];
+
 export class BoundaryCLI implements IBoundaryCLI {
   private activeProcesses: Map<string, ChildProcess> = new Map();
+  private resolvedCliPath: string | undefined;
+  private cliPathResolved = false;
 
   private get cliPath(): string {
-    return getConfigurationService().get('cliPath');
+    const configuredPath = getConfigurationService().get('cliPath');
+    // If user configured a specific non-default path, use it
+    if (configuredPath && configuredPath !== 'boundary') {
+      return configuredPath;
+    }
+    // Use resolved path if we found one, otherwise fall back to configured
+    return this.resolvedCliPath || configuredPath;
+  }
+
+  /**
+   * Find the Boundary CLI in common installation paths
+   * Tries absolute paths first since VS Code may not have the same PATH as terminal
+   */
+  private async findCliPath(): Promise<string | undefined> {
+    for (const cliPath of COMMON_CLI_PATHS) {
+      try {
+        logger.debug(`Checking for Boundary CLI at: ${cliPath}`);
+        await execAsync(`"${cliPath}" version`, { timeout: 5000 });
+        logger.info(`Found Boundary CLI at: ${cliPath}`);
+        return cliPath;
+      } catch (err) {
+        logger.debug(`CLI not found at ${cliPath}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Ensure CLI path is resolved before use
+   */
+  private async ensureCliPath(): Promise<void> {
+    if (this.cliPathResolved) {
+      return;
+    }
+
+    const configuredPath = getConfigurationService().get('cliPath');
+
+    // If user set a custom path, use it directly
+    if (configuredPath && configuredPath !== 'boundary') {
+      this.cliPathResolved = true;
+      return;
+    }
+
+    // Try to find CLI in common paths
+    const foundPath = await this.findCliPath();
+    if (foundPath) {
+      this.resolvedCliPath = foundPath;
+    }
+    this.cliPathResolved = true;
   }
 
   /**
@@ -69,10 +130,15 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async checkInstalled(): Promise<boolean> {
+    // Ensure we've resolved the CLI path first
+    await this.ensureCliPath();
+
+    // Now try to execute with the resolved path
     try {
       await this.execute(['version']);
       return true;
-    } catch {
+    } catch (err) {
+      logger.error('CLI check failed:', err);
       return false;
     }
   }
@@ -116,6 +182,24 @@ export class BoundaryCLI implements IBoundaryCLI {
       return token || undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  async listAuthMethods(scopeId?: string): Promise<BoundaryAuthMethod[]> {
+    const args = ['auth-methods', 'list', '-format', 'json'];
+    if (scopeId) {
+      args.push('-scope-id', scopeId);
+    } else {
+      // Default to global scope for auth methods discovery
+      args.push('-scope-id', 'global');
+    }
+
+    try {
+      const result = await this.execute(args);
+      return parseAuthMethodsResponse(result.stdout);
+    } catch (error) {
+      logger.warn('Failed to list auth methods:', error);
+      return [];
     }
   }
 
