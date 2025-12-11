@@ -16,6 +16,7 @@ export class AuthManager implements IAuthManager {
   readonly onAuthStateChanged = this._onAuthStateChanged.event;
 
   private authenticated = false;
+  private initialized = false;
   private secretStorage: vscode.SecretStorage;
 
   constructor(private context: vscode.ExtensionContext) {
@@ -52,8 +53,10 @@ export class AuthManager implements IAuthManager {
       }
     }
 
-    if (wasAuthenticated !== this.authenticated) {
-      logger.info(`Auth state changed: ${this.authenticated ? 'authenticated' : 'unauthenticated'}`);
+    // Always set context on state change OR first initialization
+    if (wasAuthenticated !== this.authenticated || !this.initialized) {
+      this.initialized = true;
+      logger.info(`Auth state: ${this.authenticated ? 'authenticated' : 'unauthenticated'}`);
       this._onAuthStateChanged.fire(this.authenticated);
       void vscode.commands.executeCommand('setContext', 'boundary.authenticated', this.authenticated);
     }

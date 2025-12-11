@@ -6,7 +6,9 @@ import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
 import { AuthResult, BoundaryScope, BoundaryTarget, SessionAuthorization } from '../types';
 
 // Regex patterns for parsing CLI output
-export const PORT_REGEX = /(?:Proxy listening|Listening) on (?:127\.0\.0\.1|localhost):(\d+)/i;
+// Matches both old format: "Proxy listening on 127.0.0.1:PORT"
+// and new format: "  Port:                PORT"
+export const PORT_REGEX = /(?:(?:Proxy listening|Listening) on (?:127\.0\.0\.1|localhost):(\d+)|Port:\s+(\d+))/i;
 export const VERSION_REGEX = /Boundary v?(\d+\.\d+\.\d+)/i;
 
 /**
@@ -230,10 +232,14 @@ export function parseSessionAuthResponse(output: string): SessionAuthorization {
  */
 export function extractPort(output: string): number | undefined {
   const match = PORT_REGEX.exec(output);
-  if (match && match[1]) {
-    const port = parseInt(match[1], 10);
-    if (!isNaN(port) && port > 0 && port <= 65535) {
-      return port;
+  if (match) {
+    // Try both capture groups (old format uses group 1, new format uses group 2)
+    const portStr = match[1] || match[2];
+    if (portStr) {
+      const port = parseInt(portStr, 10);
+      if (!isNaN(port) && port > 0 && port <= 65535) {
+        return port;
+      }
     }
   }
   return undefined;

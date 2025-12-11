@@ -78,9 +78,9 @@ export class TargetProvider implements ITargetProvider {
   getChildren(element?: TargetTreeItemData): TargetTreeItemData[] {
     // Root level
     if (!element) {
-      // Not authenticated
+      // Not authenticated - return empty to show welcome view
       if (!this.authenticated) {
-        return [createLoginItem()];
+        return [];
       }
 
       // Loading

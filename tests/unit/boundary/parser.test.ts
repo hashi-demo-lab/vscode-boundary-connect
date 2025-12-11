@@ -45,10 +45,33 @@ describe('Boundary Parser', () => {
       expect(match![1]).toBe('54321');
     });
 
+    it('should match new format "Port: 12345"', () => {
+      const output = `Proxy listening information:
+  Address:             127.0.0.1
+  Connection Limit:    -1
+  Expiration:          Fri, 12 Dec 2025 17:36:29 AEDT
+  Port:                59262
+  Protocol:            ssh
+  Session ID:          s_9i9Y0qR08T`;
+      const match = output.match(PORT_REGEX);
+
+      expect(match).not.toBeNull();
+      // New format uses capture group 2
+      expect(match![2]).toBe('59262');
+    });
+
+    it('should match simplified new format', () => {
+      const output = '  Port:                12345';
+      const match = output.match(PORT_REGEX);
+
+      expect(match).not.toBeNull();
+      // New format uses capture group 2
+      expect(match![2]).toBe('12345');
+    });
+
     it('should not match invalid formats', () => {
       const outputs = [
         'Connected to target',
-        'Port: 12345',
         'Address: 127.0.0.1:12345',
       ];
 
@@ -85,6 +108,17 @@ describe('Boundary Parser', () => {
         Proxy listening on 127.0.0.1:22222
       `;
       expect(extractPort(output)).toBe(11111);
+    });
+
+    it('should extract port from new multiline format', () => {
+      const output = `Proxy listening information:
+  Address:             127.0.0.1
+  Connection Limit:    -1
+  Expiration:          Fri, 12 Dec 2025 17:36:29 AEDT
+  Port:                59262
+  Protocol:            ssh
+  Session ID:          s_9i9Y0qR08T`;
+      expect(extractPort(output)).toBe(59262);
     });
   });
 

@@ -19,7 +19,7 @@ import { showAuthMethodPicker, showTargetPicker, showSessionsList } from './ui/q
 import { createSessionsPanelProvider, disposeSessionsPanelProvider } from './ui/sessionsPanel';
 import { getTargetDecorationProvider, disposeTargetDecorationProvider } from './ui/decorationProvider';
 import { getConfigurationService, disposeConfigurationService } from './utils/config';
-import { Logger, logger } from './utils/logger';
+import { Logger, LogLevel, logger } from './utils/logger';
 import { BoundaryError, BoundaryErrorCode } from './utils/errors';
 
 let authManager: AuthManager;
@@ -33,7 +33,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Initialize configuration
   const config = getConfigurationService();
-  logger.setLogLevel(config.get('logLevel'));
+  const logLevel = (process.env.BOUNDARY_LOG_LEVEL || config.get('logLevel')) as LogLevel;
+  logger.setLogLevel(logLevel);
+  logger.debug('Extension activation started with log level:', logLevel);
 
   // Listen for config changes
   context.subscriptions.push(
@@ -47,6 +49,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const cliInstalled = await cli.checkInstalled();
 
   if (!cliInstalled) {
+    logger.error('Boundary CLI not found');
     const action = await vscode.window.showWarningMessage(
       'Boundary CLI not found. Some features may not work.',
       'Install',
@@ -63,6 +66,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         'boundary.cliPath'
       );
     }
+  } else {
+    const version = await cli.getVersion();
+    logger.info('Boundary CLI version:', version || 'unknown');
+    logger.debug('Boundary CLI is installed and available');
   }
 
   // Initialize auth manager
@@ -97,7 +104,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Wire up auth state changes to target provider
   context.subscriptions.push(
-    authManager.onAuthStateChanged(authenticated => {
+    authManager.onAuthStateChanged(async authenticated => {
+      logger.debug('Auth state changed:', authenticated);
+      await vscode.commands.executeCommand('setContext', 'boundary.authenticated', authenticated);
+      logger.debug('Context boundary.authenticated updated to:', authenticated);
       targetProvider.setAuthenticated(authenticated);
     })
   );
@@ -113,13 +123,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   // Register commands
+  logger.debug('Registering commands...');
   registerCommands(context);
+  logger.debug('Commands registered successfully');
 
   // Check initial auth state
   const isAuthenticated = await authManager.isAuthenticated();
+  logger.debug('Initial auth state:', isAuthenticated);
+
+  // Set context for views
+  await vscode.commands.executeCommand('setContext', 'boundary.authenticated', isAuthenticated);
+  logger.debug('Context boundary.authenticated set to:', isAuthenticated);
+
   targetProvider.setAuthenticated(isAuthenticated);
 
   logger.info('Boundary extension activated');
+  logger.show(); // Automatically show output channel in debug mode
 }
 
 /**
@@ -129,11 +148,14 @@ function registerCommands(context: vscode.ExtensionContext): void {
   // Login command
   context.subscriptions.push(
     vscode.commands.registerCommand('boundary.login', async () => {
+      logger.debug('boundary.login command invoked');
       const method = await showAuthMethodPicker();
       if (!method) {
+        logger.debug('No auth method selected');
         return;
       }
 
+      logger.debug('Auth method selected:', method);
       if (method === 'oidc') {
         await executeOidcAuth(authManager);
       } else {
