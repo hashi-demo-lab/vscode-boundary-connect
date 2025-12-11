@@ -16,6 +16,8 @@ import { disposeTargetService } from './targets/targetService';
 import { getConnectionManager, disposeConnectionManager } from './connection/connectionManager';
 import { getStatusBarManager, disposeStatusBarManager } from './ui/statusBar';
 import { showAuthMethodPicker, showTargetPicker, showSessionsList } from './ui/quickPick';
+import { createSessionsPanelProvider, disposeSessionsPanelProvider } from './ui/sessionsPanel';
+import { getTargetDecorationProvider, disposeTargetDecorationProvider } from './ui/decorationProvider';
 import { getConfigurationService, disposeConfigurationService } from './utils/config';
 import { Logger, logger } from './utils/logger';
 import { BoundaryError, BoundaryErrorCode } from './utils/errors';
@@ -77,6 +79,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     showCollapseAll: true,
   });
   context.subscriptions.push(treeView);
+
+  // Register Sessions Panel (Webview)
+  const sessionsPanelProvider = createSessionsPanelProvider(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      'boundary.sessionsPanel',
+      sessionsPanelProvider
+    )
+  );
+
+  // Register Tree Item Decoration Provider (shows connection status)
+  const decorationProvider = getTargetDecorationProvider();
+  context.subscriptions.push(
+    vscode.window.registerFileDecorationProvider(decorationProvider)
+  );
 
   // Wire up auth state changes to target provider
   context.subscriptions.push(
@@ -268,6 +285,8 @@ export function deactivate(): void {
   // Dispose all singletons
   disposeConnectionManager();
   disposeStatusBarManager();
+  disposeSessionsPanelProvider();
+  disposeTargetDecorationProvider();
   disposeTargetService();
   disposeBoundaryCLI();
   disposeConfigurationService();

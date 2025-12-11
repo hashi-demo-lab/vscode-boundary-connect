@@ -191,6 +191,9 @@ export interface IRemoteSSHIntegration {
 
 export interface ExtensionConfiguration {
   cliPath: string;
+  addr: string;
+  tlsInsecure: boolean;
+  keyringType: 'auto' | 'none';
   defaultAuthMethod: AuthMethod;
   boundaryAddr?: string;
   autoConnect: boolean;

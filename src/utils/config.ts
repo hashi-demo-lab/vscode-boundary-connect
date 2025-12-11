@@ -26,6 +26,9 @@ export class ConfigurationService implements IConfigurationService, vscode.Dispo
 
     return {
       cliPath: config.get<string>('cliPath', 'boundary'),
+      addr: config.get<string>('addr', ''),
+      tlsInsecure: config.get<boolean>('tlsInsecure', false),
+      keyringType: config.get<'auto' | 'none'>('keyringType', 'auto'),
       defaultAuthMethod: config.get<AuthMethod>('defaultAuthMethod', 'oidc'),
       boundaryAddr: config.get<string>('boundaryAddr'),
       autoConnect: config.get<boolean>('autoConnect', false),

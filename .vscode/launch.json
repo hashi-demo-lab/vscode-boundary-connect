@@ -11,7 +11,11 @@
       "outFiles": [
         "${workspaceFolder}/out/**/*.js"
       ],
-      "preLaunchTask": "npm: compile"
+      "preLaunchTask": "npm: compile",
+      "env": {
+        "BOUNDARY_ADDR": "https://boundary.local",
+        "BOUNDARY_TLS_INSECURE": "true"
+      }
     },
     {
       "name": "Extension Tests",
@@ -22,7 +26,7 @@
         "--extensionTestsPath=${workspaceFolder}/out/test/suite/index"
       ],
       "outFiles": [
-        "${workspaceFolder}/out/test/**/*.js"
+        "${workspaceFolder}/out/**/*.js"
       ],
       "preLaunchTask": "npm: compile"
     }

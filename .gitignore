@@ -50,4 +50,3 @@ sandbox.backend.tf
 # Node.js
 node_modules/
 out/
-*.vsix

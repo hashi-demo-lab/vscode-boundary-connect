@@ -16,6 +16,11 @@ export class TargetTreeItem extends vscode.TreeItem {
     this.tooltip = data.tooltip || data.label;
     this.contextValue = data.type;
 
+    // Enable decorations for targets via custom URI scheme
+    if (data.type === 'target' && data.target) {
+      this.resourceUri = vscode.Uri.parse(`boundary-target:${data.target.id}`);
+    }
+
     this.setIcon(data.type);
     this.setCommand(data);
   }

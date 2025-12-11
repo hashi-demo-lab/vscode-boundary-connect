@@ -40,6 +40,34 @@ export class BoundaryCLI implements IBoundaryCLI {
     return getConfigurationService().get('cliPath');
   }
 
+  /**
+   * Get environment variables for CLI execution
+   */
+  private getCliEnv(): NodeJS.ProcessEnv {
+    const config = getConfigurationService().getConfiguration();
+    const env = { ...process.env };
+
+    // Set BOUNDARY_ADDR if configured
+    if (config.addr) {
+      env.BOUNDARY_ADDR = config.addr;
+    }
+
+    // Set TLS insecure mode if configured
+    if (config.tlsInsecure) {
+      env.BOUNDARY_TLS_INSECURE = 'true';
+    }
+
+    return env;
+  }
+
+  /**
+   * Get keyring type args
+   */
+  private getKeyringArgs(): string[] {
+    const keyringType = getConfigurationService().get('keyringType');
+    return keyringType === 'none' ? ['-keyring-type', 'none'] : [];
+  }
+
   async checkInstalled(): Promise<boolean> {
     try {
       await this.execute(['version']);
@@ -59,7 +87,7 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async authenticate(method: AuthMethod, credentials?: Credentials): Promise<AuthResult> {
-    const args = ['authenticate', method, '-format', 'json'];
+    const args = ['authenticate', method, '-format', 'json', ...this.getKeyringArgs()];
 
     if (method === 'password' && credentials) {
       const pwdCreds = credentials as PasswordCredentials;
@@ -92,7 +120,7 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async listScopes(parentScopeId?: string): Promise<BoundaryScope[]> {
-    const args = ['scopes', 'list', '-format', 'json'];
+    const args = ['scopes', 'list', '-format', 'json', ...this.getKeyringArgs()];
     if (parentScopeId) {
       args.push('-scope-id', parentScopeId);
     }
@@ -102,7 +130,7 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async listTargets(scopeId?: string, recursive = true): Promise<BoundaryTarget[]> {
-    const args = ['targets', 'list', '-format', 'json'];
+    const args = ['targets', 'list', '-format', 'json', ...this.getKeyringArgs()];
     if (scopeId) {
       args.push('-scope-id', scopeId);
     }
@@ -115,7 +143,7 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async authorizeSession(targetId: string): Promise<SessionAuthorization> {
-    const args = ['targets', 'authorize-session', '-id', targetId, '-format', 'json'];
+    const args = ['targets', 'authorize-session', '-id', targetId, '-format', 'json', ...this.getKeyringArgs()];
     const result = await this.execute(args);
     return parseSessionAuthResponse(result.stdout);
   }
@@ -142,7 +170,7 @@ export class BoundaryCLI implements IBoundaryCLI {
       logger.info(`Starting boundary connect for target ${targetId}`);
 
       const child = spawn(this.cliPath, args, {
-        env: { ...process.env },
+        env: this.getCliEnv(),
       });
 
       this.activeProcesses.set(sessionId, child);
@@ -245,7 +273,7 @@ export class BoundaryCLI implements IBoundaryCLI {
 
     try {
       const { stdout, stderr } = await execAsync(command, {
-        env: { ...process.env },
+        env: this.getCliEnv(),
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       });
 
