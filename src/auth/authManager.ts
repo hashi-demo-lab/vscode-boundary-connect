@@ -61,6 +61,16 @@ export class AuthManager implements IAuthManager {
         type: 'AUTH_ERROR',
         error: error instanceof Error ? error.message : String(error),
       });
+
+      // Notify user of initialization failure
+      void vscode.window.showWarningMessage(
+        'Boundary extension initialization failed. Some features may not work.',
+        'View Logs'
+      ).then(action => {
+        if (action === 'View Logs') {
+          logger.show();
+        }
+      });
     }
   }
 

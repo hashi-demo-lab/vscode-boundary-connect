@@ -2,6 +2,7 @@
  * Boundary CLI wrapper
  */
 
+import * as vscode from 'vscode';
 import { spawn, ChildProcess, exec } from 'child_process';
 import { promisify } from 'util';
 import {
@@ -49,6 +50,19 @@ export class BoundaryCLI implements IBoundaryCLI {
   private resolvedCliPath: string | undefined;
   private cliPathResolved = false;
   private cliPathResolutionFailed = false;
+  private configChangeSubscription: vscode.Disposable | undefined;
+
+  constructor() {
+    // Listen for config changes to reset CLI path resolution
+    this.configChangeSubscription = vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('boundary.cliPath')) {
+        logger.info('CLI path configuration changed, resetting resolution');
+        this.cliPathResolved = false;
+        this.cliPathResolutionFailed = false;
+        this.resolvedCliPath = undefined;
+      }
+    });
+  }
 
   private get cliPath(): string {
     const configuredPath = getConfigurationService().get('cliPath');
@@ -177,7 +191,8 @@ export class BoundaryCLI implements IBoundaryCLI {
     try {
       const result = await this.execute(['version']);
       return extractVersion(result.stdout);
-    } catch {
+    } catch (error) {
+      logger.debug('Failed to get CLI version:', error);
       return undefined;
     }
   }
@@ -283,7 +298,13 @@ export class BoundaryCLI implements IBoundaryCLI {
       const result = await this.execute(['config', 'get-token']);
       const token = result.stdout.trim();
       return token || undefined;
-    } catch {
+    } catch (error) {
+      // Log for debugging - this is a common failure point on first install
+      if (error instanceof BoundaryError && error.code === BoundaryErrorCode.CLI_NOT_FOUND) {
+        logger.debug('Cannot check token: Boundary CLI not found');
+      } else {
+        logger.debug('Failed to retrieve token from CLI keyring:', error);
+      }
       return undefined;
     }
   }
@@ -297,13 +318,10 @@ export class BoundaryCLI implements IBoundaryCLI {
       args.push('-scope-id', 'global');
     }
 
-    try {
-      const result = await this.execute(args);
-      return parseAuthMethodsResponse(result.stdout);
-    } catch (error) {
-      logger.warn('Failed to list auth methods:', error);
-      return [];
-    }
+    // Let errors propagate so callers can handle appropriately
+    // This allows distinguishing "no auth methods" from "failed to fetch"
+    const result = await this.execute(args);
+    return parseAuthMethodsResponse(result.stdout);
   }
 
   async listScopes(parentScopeId?: string): Promise<BoundaryScope[]> {
@@ -336,6 +354,9 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async connect(targetId: string, options: ConnectOptions = {}): Promise<Connection> {
+    // Ensure CLI path is resolved before spawning process
+    await this.ensureCliPath();
+
     // Always use 'boundary connect' (TCP proxy mode) for all target types
     // This creates a persistent local proxy that VS Code Remote SSH can connect to
     // The 'boundary connect ssh' subcommand auto-launches SSH which we don't want
@@ -551,6 +572,10 @@ export class BoundaryCLI implements IBoundaryCLI {
 
   dispose(): void {
     this.killAllProcesses();
+    if (this.configChangeSubscription) {
+      this.configChangeSubscription.dispose();
+      this.configChangeSubscription = undefined;
+    }
   }
 }
 

@@ -83,7 +83,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   authManager = createAuthManager(context);
   context.subscriptions.push(authManager);
 
-  // Initialize target provider
+  // Initialize auth state BEFORE creating TargetProvider to avoid race condition
+  // TargetProvider subscribes to auth state changes, so we need auth state resolved first
+  await authManager.initialize();
+  logger.debug('Auth initialization complete, state:', authManager.state);
+
+  // Initialize target provider (after auth init to prevent race condition)
   targetProvider = createTargetProvider();
   targetProvider.setAuthManager(authManager); // Wire up for token expiration handling
   context.subscriptions.push(targetProvider);
@@ -124,10 +129,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   logger.debug('Registering commands...');
   registerCommands(context);
   logger.debug('Commands registered successfully');
-
-  // Initialize auth state (checks CLI keyring for existing token)
-  await authManager.initialize();
-  logger.debug('Auth initialization complete, state:', authManager.state);
 
   logger.info('Boundary extension activated');
 }

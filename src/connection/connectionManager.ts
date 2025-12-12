@@ -195,6 +195,8 @@ export class ConnectionManager implements IConnectionManager {
   dispose(): void {
     // Disconnect all sessions on dispose
     void this.disconnectAll();
+    // Clear username cache to prevent memory leak
+    this.usernameCache.clear();
     this._onSessionsChanged.dispose();
   }
 }

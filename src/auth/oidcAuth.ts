@@ -196,7 +196,10 @@ export async function executeOidcAuth(
     logger.info('Discovering auth methods...');
 
     // Show progress while discovering auth methods
-    let authMethods = await vscode.window.withProgress(
+    let authMethods: BoundaryAuthMethod[] = [];
+    let discoveryError: Error | undefined;
+
+    await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title: 'Discovering sign-in options...',
@@ -204,25 +207,24 @@ export async function executeOidcAuth(
       },
       async () => {
         try {
-          const methods = await cli.listAuthMethods();
-          logger.info(`Discovered ${methods.length} auth methods`);
-          return methods;
+          authMethods = await cli.listAuthMethods();
+          logger.info(`Discovered ${authMethods.length} auth methods`);
         } catch (err) {
           logger.error('Auth method discovery failed:', err);
-          return [];
+          discoveryError = err instanceof Error ? err : new Error(String(err));
         }
       }
     );
 
     // If discovery failed and TLS is not disabled, offer to disable it
-    if (authMethods.length === 0) {
+    if (authMethods.length === 0 && discoveryError) {
       const config = getConfigurationService();
       const addr = config.get('addr');
       const tlsInsecure = config.get('tlsInsecure');
 
       if (addr?.startsWith('https://') && !tlsInsecure) {
         const retry = await vscode.window.showWarningMessage(
-          'Could not connect to Boundary server. This may be due to a self-signed certificate.',
+          `Could not connect to Boundary server: ${discoveryError.message}. This may be due to a self-signed certificate.`,
           'Skip TLS Verification',
           'Cancel'
         );
@@ -232,8 +234,22 @@ export async function executeOidcAuth(
           logger.info('TLS verification disabled, retrying...');
 
           // Retry discovery
-          authMethods = await cli.listAuthMethods();
+          try {
+            authMethods = await cli.listAuthMethods();
+            discoveryError = undefined;
+          } catch (err) {
+            logger.error('Auth method discovery retry failed:', err);
+            discoveryError = err instanceof Error ? err : new Error(String(err));
+          }
         }
+      } else if (!addr) {
+        // No address configured - this is a different error
+        logger.warn('No Boundary address configured');
+      } else {
+        // TLS already disabled or not HTTPS - show the actual error
+        void vscode.window.showErrorMessage(
+          `Failed to discover auth methods: ${discoveryError.message}`
+        );
       }
     }
 
