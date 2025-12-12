@@ -97,9 +97,9 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
   <title>Boundary Sessions</title>
-  <style>
+  <style nonce="${nonce}">
     /* CSS Custom Properties - Boundary Brand (Coral/Salmon Theme) */
     :root {
       --boundary-primary: #E76F51;

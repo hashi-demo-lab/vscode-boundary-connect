@@ -20,6 +20,7 @@ import {
   SessionAuthorization,
   TokenResult,
 } from '../types';
+import { generateConnectionId } from '../utils/id';
 import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
 import { logger } from '../utils/logger';
 import { getConfigurationService } from '../utils/config';
@@ -385,7 +386,7 @@ export class BoundaryCLI implements IBoundaryCLI {
     }
 
     return new Promise((resolve, reject) => {
-      const sessionId = `session-${Date.now()}`;
+      const sessionId = generateConnectionId();
       logger.info(`Starting boundary connect for target ${targetId}`);
 
       const child = spawn(this.cliPath, args, {

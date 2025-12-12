@@ -57,6 +57,45 @@ export interface IAuthManager extends vscode.Disposable {
 }
 
 // ============================================================================
+// Auth State Types
+// ============================================================================
+
+/**
+ * Authentication state enum - explicit state machine
+ */
+export type AuthState =
+  | 'initializing'      // Extension starting up, checking auth
+  | 'unauthenticated'   // No valid token
+  | 'authenticating'    // Login in progress
+  | 'authenticated'     // Valid token available
+  | 'expired'           // Token expired, needs re-auth
+  | 'error';            // Auth system error
+
+/**
+ * State transition events
+ */
+export type AuthEvent =
+  | { type: 'INIT_COMPLETE'; hasToken: boolean }
+  | { type: 'LOGIN_START' }
+  | { type: 'LOGIN_SUCCESS' }
+  | { type: 'LOGIN_FAILURE'; error: string }
+  | { type: 'TOKEN_EXPIRED' }
+  | { type: 'LOGOUT' }
+  | { type: 'AUTH_ERROR'; error: string };
+
+/**
+ * Auth State Manager interface for dependency injection and testing
+ */
+export interface IAuthStateManager extends vscode.Disposable {
+  readonly state: AuthState;
+  readonly isAuthenticated: boolean;
+  readonly lastError: string | undefined;
+  dispatch(event: AuthEvent): void;
+  reset(): void;
+  readonly onStateChanged: vscode.Event<AuthState>;
+}
+
+// ============================================================================
 // Boundary Domain Types
 // ============================================================================
 
@@ -220,6 +259,20 @@ export interface TargetTreeItemData {
 export interface ITargetProvider extends vscode.TreeDataProvider<TargetTreeItemData> {
   refresh(): void;
   setAuthManager(authManager: IAuthManager): void;
+}
+
+/**
+ * Target Service interface for dependency injection and testing
+ */
+export interface ITargetService extends vscode.Disposable {
+  getAllTargets(forceRefresh?: boolean): Promise<BoundaryTarget[]>;
+  getTargetsForScope(scopeId: string, forceRefresh?: boolean): Promise<BoundaryTarget[]>;
+  getTarget(targetId: string): Promise<BoundaryTarget | undefined>;
+  getScopes(forceRefresh?: boolean): Promise<BoundaryScope[]>;
+  groupTargetsByScope(targets: BoundaryTarget[]): Map<string, BoundaryTarget[]>;
+  refresh(): Promise<void>;
+  clearCache(): void;
+  readonly onTargetsChanged: vscode.Event<void>;
 }
 
 // ============================================================================

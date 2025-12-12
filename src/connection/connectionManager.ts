@@ -9,13 +9,25 @@ import { logger } from '../utils/logger';
 import { createSession, terminateSession } from './session';
 import { triggerRemoteSSH } from './remoteSSH';
 
+/** Storage key prefix for persisted usernames */
+const USERNAME_STORAGE_PREFIX = 'boundary.username.';
+
 export class ConnectionManager implements IConnectionManager {
   private readonly _onSessionsChanged = new vscode.EventEmitter<Session[]>();
   readonly onSessionsChanged = this._onSessionsChanged.event;
 
   private sessions: Map<string, Session> = new Map();
+  private globalState: vscode.Memento | undefined;
 
   constructor() {}
+
+  /**
+   * Set the global state for persisting usernames across sessions
+   * Called during extension activation
+   */
+  setGlobalState(globalState: vscode.Memento): void {
+    this.globalState = globalState;
+  }
 
   async connect(target: BoundaryTarget): Promise<Session> {
     logger.info(`Connecting to target: ${target.name} (${target.id})`);
@@ -135,15 +147,25 @@ export class ConnectionManager implements IConnectionManager {
     return userName;
   }
 
-  // Simple in-memory username cache (could be persisted later)
-  private usernameCache: Map<string, string> = new Map();
-
+  /**
+   * Get saved username from persistent storage
+   */
   private getSavedUsername(targetId: string): string | undefined {
-    return this.usernameCache.get(targetId);
+    if (!this.globalState) {
+      return undefined;
+    }
+    return this.globalState.get<string>(`${USERNAME_STORAGE_PREFIX}${targetId}`);
   }
 
+  /**
+   * Save username to persistent storage for future sessions
+   */
   private saveUsername(targetId: string, userName: string): void {
-    this.usernameCache.set(targetId, userName);
+    if (!this.globalState) {
+      logger.warn('Cannot persist username: globalState not initialized');
+      return;
+    }
+    void this.globalState.update(`${USERNAME_STORAGE_PREFIX}${targetId}`, userName);
   }
 
   async disconnect(sessionId: string): Promise<void> {
@@ -195,8 +217,6 @@ export class ConnectionManager implements IConnectionManager {
   dispose(): void {
     // Disconnect all sessions on dispose
     void this.disconnectAll();
-    // Clear username cache to prevent memory leak
-    this.usernameCache.clear();
     this._onSessionsChanged.dispose();
   }
 }

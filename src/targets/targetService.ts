@@ -8,7 +8,7 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryScope, BoundaryTarget } from '../types';
+import { BoundaryScope, BoundaryTarget, ITargetService } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
 
@@ -42,7 +42,7 @@ class Mutex {
   }
 }
 
-export class TargetService implements vscode.Disposable {
+export class TargetService implements ITargetService {
   private targetsCache: Map<string, BoundaryTarget[]> = new Map();
   private scopesCache: BoundaryScope[] = [];
   private lastFetchTime: number = 0;

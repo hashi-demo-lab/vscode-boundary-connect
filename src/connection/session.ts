@@ -5,6 +5,7 @@
 import { ChildProcess } from 'child_process';
 import { BoundaryTarget, Session } from '../types';
 import { logger } from '../utils/logger';
+import { generateSessionId } from '../utils/id';
 
 /**
  * Create a new session from a connection
@@ -15,7 +16,7 @@ export function createSession(
   localPort: number
 ): Session {
   return {
-    id: `session-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+    id: generateSessionId(),
     targetId: target.id,
     targetName: target.name,
     targetType: target.type,

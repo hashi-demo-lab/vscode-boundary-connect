@@ -17,7 +17,7 @@ import { AuthManager, createAuthManager } from './auth/authManager';
 import { disposeAuthStateManager } from './auth/authState';
 import { executePasswordAuth } from './auth/passwordAuth';
 import { executeOidcAuth } from './auth/oidcAuth';
-import { getBoundaryCLI, disposeBoundaryCLI } from './boundary/cli';
+import { BoundaryCLI, getBoundaryCLI, disposeBoundaryCLI } from './boundary/cli';
 import { createTargetProvider, TargetProvider } from './targets/targetProvider';
 import { disposeTargetService } from './targets/targetService';
 import { getConnectionManager, disposeConnectionManager } from './connection/connectionManager';
@@ -25,12 +25,31 @@ import { getStatusBarManager, disposeStatusBarManager } from './ui/statusBar';
 import { showAuthMethodPicker, showTargetPicker, showSessionsList } from './ui/quickPick';
 import { createSessionsPanelProvider, disposeSessionsPanelProvider } from './ui/sessionsPanel';
 import { getTargetDecorationProvider, disposeTargetDecorationProvider } from './ui/decorationProvider';
-import { getConfigurationService, disposeConfigurationService } from './utils/config';
+import { ConfigurationService, getConfigurationService, disposeConfigurationService } from './utils/config';
 import { Logger, LogLevel, logger } from './utils/logger';
 import { BoundaryError, BoundaryErrorCode } from './utils/errors';
 
 let authManager: AuthManager;
 let targetProvider: TargetProvider;
+
+/**
+ * Update welcome view context values based on current state.
+ * This enables smart welcome views that guide users through setup.
+ */
+async function updateWelcomeViewContext(cli: BoundaryCLI, config: ConfigurationService): Promise<boolean> {
+  // Check CLI installation
+  const cliInstalled = await cli.checkInstalled();
+  await vscode.commands.executeCommand('setContext', 'boundary.cliInstalled', cliInstalled);
+
+  // Check if address is configured (setting or env var)
+  const addrSetting = config.get('addr');
+  const addrEnvVar = process.env.BOUNDARY_ADDR;
+  const addrConfigured = !!(addrSetting || addrEnvVar);
+  await vscode.commands.executeCommand('setContext', 'boundary.addrConfigured', addrConfigured);
+
+  logger.debug('Welcome view context updated:', { cliInstalled, addrConfigured });
+  return cliInstalled;
+}
 
 /**
  * Extension activation
@@ -44,39 +63,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   logger.setLogLevel(logLevel);
   logger.debug('Extension activation started with log level:', logLevel);
 
-  // Listen for config changes
+  // Listen for config changes (log level + welcome view context)
+  const cli = getBoundaryCLI();
   context.subscriptions.push(
-    config.onConfigurationChanged(cfg => {
+    config.onConfigurationChanged(async cfg => {
       logger.setLogLevel(cfg.logLevel);
+      // Re-evaluate welcome view context when config changes
+      await updateWelcomeViewContext(cli, config);
     })
   );
 
-  // Check if Boundary CLI is available
-  const cli = getBoundaryCLI();
-  const cliInstalled = await cli.checkInstalled();
+  // Set welcome view context values (CLI installed, address configured)
+  // This enables smart welcome views that guide users through setup
+  const cliInstalled = await updateWelcomeViewContext(cli, config);
 
-  if (!cliInstalled) {
-    logger.error('Boundary CLI not found');
-    const action = await vscode.window.showWarningMessage(
-      'Boundary CLI not found. Some features may not work.',
-      'Install',
-      'Configure Path'
-    );
-
-    if (action === 'Install') {
-      void vscode.env.openExternal(
-        vscode.Uri.parse('https://developer.hashicorp.com/boundary/downloads')
-      );
-    } else if (action === 'Configure Path') {
-      void vscode.commands.executeCommand(
-        'workbench.action.openSettings',
-        'boundary.cliPath'
-      );
-    }
-  } else {
+  if (cliInstalled) {
     const version = await cli.getVersion();
     logger.info('Boundary CLI version:', version || 'unknown');
-    logger.debug('Boundary CLI is installed and available');
+  } else {
+    logger.warn('Boundary CLI not found - welcome view will guide installation');
   }
 
   // Initialize auth manager (uses AuthStateManager internally)
@@ -92,6 +97,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   targetProvider = createTargetProvider();
   targetProvider.setAuthManager(authManager); // Wire up for token expiration handling
   context.subscriptions.push(targetProvider);
+
+  // Auto-fetch targets if already authenticated (since state change fired before subscription)
+  if (authManager.state === 'authenticated') {
+    targetProvider.refresh();
+  }
 
   // Register TreeView
   const treeView = vscode.window.createTreeView('boundary.targets', {
@@ -117,6 +127,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Wire up connection manager to status bar
   const connectionManager = getConnectionManager();
+  // Initialize connection manager with globalState for username persistence
+  connectionManager.setGlobalState(context.globalState);
   const statusBar = getStatusBarManager();
 
   context.subscriptions.push(
@@ -213,10 +225,17 @@ function registerCommands(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Connect to specific target (from TreeView)
+  // Connect to specific target (from TreeView context menu)
   context.subscriptions.push(
-    vscode.commands.registerCommand('boundary.connectTarget', async (target: BoundaryTarget) => {
+    vscode.commands.registerCommand('boundary.connectTarget', async (item: unknown) => {
+      if (!item) {
+        return;
+      }
+      // Context menu passes TargetTreeItemData, extract the target
+      const treeItemData = item as { target?: BoundaryTarget };
+      const target = treeItemData.target;
       if (!target) {
+        logger.warn('connectTarget called without valid target data');
         return;
       }
       await connectToTarget(target);
