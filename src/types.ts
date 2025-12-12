@@ -256,9 +256,14 @@ export interface TargetTreeItemData {
   target?: BoundaryTarget;
 }
 
-export interface ITargetProvider extends vscode.TreeDataProvider<TargetTreeItemData> {
+export interface ITargetProvider extends vscode.TreeDataProvider<TargetTreeItemData>, vscode.Disposable {
   refresh(): void;
   setAuthManager(authManager: IAuthManager): void;
+  /**
+   * Initialize event subscriptions (for lazy initialization)
+   * Should be called after construction when all dependencies are ready
+   */
+  initialize(): void;
 }
 
 /**

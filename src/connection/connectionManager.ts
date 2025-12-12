@@ -3,7 +3,7 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget, BrokeredCredential, IConnectionManager, Session } from '../types';
+import { BoundaryTarget, BrokeredCredential, IBoundaryCLI, IConnectionManager, Session } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
 import { createSession, terminateSession } from './session';
@@ -18,12 +18,21 @@ export class ConnectionManager implements IConnectionManager {
 
   private sessions: Map<string, Session> = new Map();
   private globalState: vscode.Memento | undefined;
+  private readonly cli: IBoundaryCLI;
 
-  constructor() {}
+  /**
+   * Create a new ConnectionManager
+   * @param cli - Boundary CLI (optional for backward compatibility)
+   * @param globalState - VS Code global state for persistence (optional)
+   */
+  constructor(cli?: IBoundaryCLI, globalState?: vscode.Memento) {
+    this.cli = cli ?? getBoundaryCLI();
+    this.globalState = globalState;
+  }
 
   /**
    * Set the global state for persisting usernames across sessions
-   * Called during extension activation
+   * Called during extension activation (for backward compatibility)
    */
   setGlobalState(globalState: vscode.Memento): void {
     this.globalState = globalState;
@@ -32,14 +41,12 @@ export class ConnectionManager implements IConnectionManager {
   async connect(target: BoundaryTarget): Promise<Session> {
     logger.info(`Connecting to target: ${target.name} (${target.id})`);
 
-    const cli = getBoundaryCLI();
-
     // First, try to get session authorization to check for brokered credentials
     let brokeredCredentials: BrokeredCredential[] | undefined;
     let userName: string | undefined;
 
     try {
-      const authz = await cli.authorizeSession(target.id);
+      const authz = await this.cli.authorizeSession(target.id);
       if (authz.credentials && authz.credentials.length > 0) {
         brokeredCredentials = authz.credentials;
         // Use username from brokered credentials if available
@@ -64,7 +71,7 @@ export class ConnectionManager implements IConnectionManager {
     }
 
     // Spawn boundary connect (TCP proxy mode)
-    const connection = await cli.connect(target.id);
+    const connection = await this.cli.connect(target.id);
 
     // Create session
     const session = createSession(target, connection.process, connection.localPort);

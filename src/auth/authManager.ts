@@ -9,13 +9,14 @@
  */
 
 import * as vscode from 'vscode';
-import { AuthMethod, AuthResult, Credentials, IAuthManager } from '../types';
+import { AuthMethod, AuthResult, Credentials, IAuthManager, IAuthStateManager, IBoundaryCLI } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
-import { AuthStateManager, getAuthStateManager } from './authState';
+import { getAuthStateManager } from './authState';
 
 export class AuthManager implements IAuthManager {
-  private readonly stateManager: AuthStateManager;
+  private readonly stateManager: IAuthStateManager;
+  private readonly cli: IBoundaryCLI;
   private initPromise: Promise<void> | undefined;
 
   // Expose state manager's event for backward compatibility
@@ -28,8 +29,19 @@ export class AuthManager implements IAuthManager {
     };
   }
 
-  constructor(private context: vscode.ExtensionContext) {
-    this.stateManager = getAuthStateManager();
+  /**
+   * Create a new AuthManager
+   * @param context - VS Code extension context
+   * @param cli - Boundary CLI (optional for backward compatibility)
+   * @param authState - Auth state manager (optional for backward compatibility)
+   */
+  constructor(
+    private context: vscode.ExtensionContext,
+    cli?: IBoundaryCLI,
+    authState?: IAuthStateManager
+  ) {
+    this.cli = cli ?? getBoundaryCLI();
+    this.stateManager = authState ?? getAuthStateManager();
   }
 
   /**
@@ -48,8 +60,7 @@ export class AuthManager implements IAuthManager {
   private async doInitialize(): Promise<void> {
     logger.info('Initializing auth state...');
 
-    const cli = getBoundaryCLI();
-    const tokenResult = await cli.getToken();
+    const tokenResult = await this.cli.getToken();
 
     switch (tokenResult.status) {
       case 'found':
@@ -95,10 +106,8 @@ export class AuthManager implements IAuthManager {
   async login(method: AuthMethod, credentials?: Credentials): Promise<AuthResult> {
     logger.info(`Attempting login with method: ${method}`);
 
-    const cli = getBoundaryCLI();
-
     // Check if CLI is available
-    const installed = await cli.checkInstalled();
+    const installed = await this.cli.checkInstalled();
     if (!installed) {
       return {
         success: false,
@@ -110,7 +119,7 @@ export class AuthManager implements IAuthManager {
     this.stateManager.dispatch({ type: 'LOGIN_START' });
 
     try {
-      const result = await cli.authenticate(method, credentials);
+      const result = await this.cli.authenticate(method, credentials);
 
       if (result.success) {
         // CLI stores token in its keyring automatically
@@ -182,8 +191,7 @@ export class AuthManager implements IAuthManager {
       return undefined;
     }
 
-    const cli = getBoundaryCLI();
-    const result = await cli.getToken();
+    const result = await this.cli.getToken();
 
     if (result.status === 'found') {
       return result.token;
@@ -201,8 +209,7 @@ export class AuthManager implements IAuthManager {
    * Updates state if token is invalid
    */
   async verifyToken(): Promise<boolean> {
-    const cli = getBoundaryCLI();
-    const result = await cli.getToken();
+    const result = await this.cli.getToken();
 
     switch (result.status) {
       case 'found':
@@ -230,7 +237,16 @@ export class AuthManager implements IAuthManager {
   }
 }
 
-// Factory function for creating AuthManager
-export function createAuthManager(context: vscode.ExtensionContext): AuthManager {
-  return new AuthManager(context);
+/**
+ * Factory function for creating AuthManager
+ * @param context - VS Code extension context
+ * @param cli - Boundary CLI (optional for backward compatibility)
+ * @param authState - Auth state manager (optional for backward compatibility)
+ */
+export function createAuthManager(
+  context: vscode.ExtensionContext,
+  cli?: IBoundaryCLI,
+  authState?: IAuthStateManager
+): AuthManager {
+  return new AuthManager(context, cli, authState);
 }

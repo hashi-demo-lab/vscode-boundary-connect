@@ -24,6 +24,7 @@ import { generateConnectionId } from '../utils/id';
 import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
 import { logger } from '../utils/logger';
 import { getConfigurationService } from '../utils/config';
+import { IConfigurationService } from '../types';
 import {
   extractPort,
   extractVersion,
@@ -53,8 +54,16 @@ export class BoundaryCLI implements IBoundaryCLI {
   private cliPathResolved = false;
   private cliPathResolutionFailed = false;
   private configChangeSubscription: vscode.Disposable | undefined;
+  private readonly configService: IConfigurationService;
 
-  constructor() {
+  /**
+   * Create a new BoundaryCLI instance
+   * @param config - Configuration service (optional for backward compatibility)
+   */
+  constructor(config?: IConfigurationService) {
+    // Use provided config or fall back to singleton for backward compatibility
+    this.configService = config ?? getConfigurationService();
+
     // Listen for config changes to reset CLI path resolution
     this.configChangeSubscription = vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('boundary.cliPath')) {
@@ -67,7 +76,7 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   private get cliPath(): string {
-    const configuredPath = getConfigurationService().get('cliPath');
+    const configuredPath = this.configService.get('cliPath');
     // If user configured a specific non-default path, use it
     if (configuredPath && configuredPath !== 'boundary') {
       return configuredPath;
@@ -112,7 +121,7 @@ export class BoundaryCLI implements IBoundaryCLI {
     // Reset failure flag for retry attempt
     this.cliPathResolutionFailed = false;
 
-    const configuredPath = getConfigurationService().get('cliPath');
+    const configuredPath = this.configService.get('cliPath');
     logger.debug(`Configured CLI path: ${configuredPath}`);
 
     // If user set a custom path, verify it works first
@@ -148,7 +157,7 @@ export class BoundaryCLI implements IBoundaryCLI {
    * Get environment variables for CLI execution
    */
   private getCliEnv(): NodeJS.ProcessEnv {
-    const config = getConfigurationService().getConfiguration();
+    const config = this.configService.getConfiguration();
     const env = { ...process.env };
 
     // Set BOUNDARY_ADDR if configured
@@ -168,7 +177,7 @@ export class BoundaryCLI implements IBoundaryCLI {
    * Get keyring type args
    */
   private getKeyringArgs(): string[] {
-    const keyringType = getConfigurationService().get('keyringType');
+    const keyringType = this.configService.get('keyringType');
     return keyringType === 'none' ? ['-keyring-type', 'none'] : [];
   }
 

@@ -8,12 +8,12 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget, IAuthManager, ITargetProvider, TargetTreeItemData } from '../types';
+import { BoundaryTarget, IAuthManager, IAuthStateManager, ITargetProvider, ITargetService, TargetTreeItemData } from '../types';
 import { TargetTreeItem, createErrorItem, createLoadingItem, createTargetItem } from './targetItem';
 import { getTargetService } from './targetService';
 import { logger } from '../utils/logger';
 import { isAuthRequired } from '../utils/errors';
-import { getAuthStateManager, AuthState } from '../auth/authState';
+import { AuthState, getAuthStateManager } from '../auth/authState';
 
 export class TargetProvider implements ITargetProvider {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TargetTreeItemData | undefined | null | void>();
@@ -27,20 +27,46 @@ export class TargetProvider implements ITargetProvider {
   // Store disposables to prevent memory leaks
   private readonly disposables: vscode.Disposable[] = [];
 
-  constructor() {
+  // Injected dependencies (with lazy fallbacks for backward compatibility)
+  private readonly targetService: ITargetService;
+  private readonly authStateManager: IAuthStateManager;
+  private initialized = false;
+
+  /**
+   * Create a new TargetProvider
+   * @param targetService - Target service (optional for backward compatibility)
+   * @param authStateManager - Auth state manager (optional for backward compatibility)
+   */
+  constructor(targetService?: ITargetService, authStateManager?: IAuthStateManager) {
+    this.targetService = targetService ?? getTargetService();
+    this.authStateManager = authStateManager ?? getAuthStateManager();
+  }
+
+  /**
+   * Initialize event subscriptions
+   * Called after construction to enable lazy initialization and avoid
+   * circular dependencies during service container setup
+   */
+  initialize(): void {
+    if (this.initialized) {
+      return;
+    }
+
     // Listen for target changes - store disposable for cleanup
     this.disposables.push(
-      getTargetService().onTargetsChanged(() => {
+      this.targetService.onTargetsChanged(() => {
         this.refresh();
       })
     );
 
     // Listen for auth state changes - store disposable for cleanup
     this.disposables.push(
-      getAuthStateManager().onStateChanged((state) => {
+      this.authStateManager.onStateChanged((state) => {
         this.handleAuthStateChange(state);
       })
     );
+
+    this.initialized = true;
   }
 
   /**
@@ -71,7 +97,7 @@ export class TargetProvider implements ITargetProvider {
    * Check if currently authenticated (delegates to state manager)
    */
   private get isAuthenticated(): boolean {
-    return getAuthStateManager().isAuthenticated;
+    return this.authStateManager.isAuthenticated;
   }
 
   refresh(): void {
@@ -88,7 +114,7 @@ export class TargetProvider implements ITargetProvider {
     this._onDidChangeTreeData.fire();
 
     try {
-      this.targets = await getTargetService().getAllTargets(true);
+      this.targets = await this.targetService.getAllTargets(true);
       this.error = undefined;
     } catch (err) {
       logger.error('Failed to fetch targets:', err);
@@ -151,7 +177,7 @@ export class TargetProvider implements ITargetProvider {
       }
 
       // Group targets by scope and show
-      const grouped = getTargetService().groupTargetsByScope(this.targets);
+      const grouped = this.targetService.groupTargetsByScope(this.targets);
       const items: TargetTreeItemData[] = [];
 
       for (const [scopeName, scopeTargets] of grouped) {
@@ -175,7 +201,7 @@ export class TargetProvider implements ITargetProvider {
     // Scope children (targets)
     if (element.type === 'scope') {
       const scopeName = element.label;
-      const grouped = getTargetService().groupTargetsByScope(this.targets);
+      const grouped = this.targetService.groupTargetsByScope(this.targets);
       const scopeTargets = grouped.get(scopeName) || [];
       return scopeTargets.map(createTargetItem);
     }
@@ -199,7 +225,15 @@ export class TargetProvider implements ITargetProvider {
   }
 }
 
-// Factory function
-export function createTargetProvider(): TargetProvider {
-  return new TargetProvider();
+/**
+ * Factory function for backward compatibility
+ * Creates and initializes the provider with singleton dependencies
+ */
+export function createTargetProvider(
+  targetService?: ITargetService,
+  authStateManager?: IAuthStateManager
+): TargetProvider {
+  const provider = new TargetProvider(targetService, authStateManager);
+  provider.initialize();
+  return provider;
 }

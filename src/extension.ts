@@ -12,32 +12,61 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget } from './types';
+import { BoundaryTarget, IAuthManager, ITargetProvider } from './types';
 import { AuthManager, createAuthManager } from './auth/authManager';
-import { disposeAuthStateManager } from './auth/authState';
+import { createAuthStateManager, disposeAuthStateManager } from './auth/authState';
 import { executePasswordAuth } from './auth/passwordAuth';
 import { executeOidcAuth } from './auth/oidcAuth';
-import { BoundaryCLI, getBoundaryCLI, disposeBoundaryCLI } from './boundary/cli';
-import { createTargetProvider, TargetProvider } from './targets/targetProvider';
-import { disposeTargetService } from './targets/targetService';
-import { getConnectionManager, disposeConnectionManager } from './connection/connectionManager';
+import { BoundaryCLI, disposeBoundaryCLI } from './boundary/cli';
+import { TargetProvider } from './targets/targetProvider';
+import { TargetService, disposeTargetService } from './targets/targetService';
+import { ConnectionManager, disposeConnectionManager } from './connection/connectionManager';
 import { cleanupBoundarySSHConfigEntries } from './connection/remoteSSH';
-import { getStatusBarManager, disposeStatusBarManager } from './ui/statusBar';
+import { StatusBarManager, disposeStatusBarManager } from './ui/statusBar';
 import { showAuthMethodPicker, showTargetPicker, showSessionsList } from './ui/quickPick';
 import { createSessionsPanelProvider, disposeSessionsPanelProvider } from './ui/sessionsPanel';
 import { getTargetDecorationProvider, disposeTargetDecorationProvider } from './ui/decorationProvider';
-import { ConfigurationService, getConfigurationService, disposeConfigurationService } from './utils/config';
+import { ConfigurationService, disposeConfigurationService } from './utils/config';
 import { Logger, LogLevel, logger } from './utils/logger';
 import { BoundaryError, BoundaryErrorCode } from './utils/errors';
+import {
+  createServiceContainer,
+  disposeServiceContainer,
+  IServiceContainer,
+  ServiceFactories,
+  setGlobalContainer,
+} from './services/container';
 
-let authManager: AuthManager;
-let targetProvider: TargetProvider;
+let authManager: IAuthManager;
+let targetProvider: ITargetProvider;
+let serviceContainer: IServiceContainer;
+
+/**
+ * Create the service factory functions for dependency injection
+ */
+function createServiceFactories(): ServiceFactories {
+  return {
+    config: () => new ConfigurationService(),
+    cli: (config) => new BoundaryCLI(config),
+    authState: () => createAuthStateManager(),
+    auth: (context, cli, authState) => createAuthManager(context, cli, authState),
+    targets: (cli) => new TargetService(cli),
+    connections: (cli, context) => {
+      const manager = new ConnectionManager(cli, context.globalState);
+      return manager;
+    },
+    statusBar: () => new StatusBarManager(),
+  };
+}
 
 /**
  * Update welcome view context values based on current state.
  * This enables smart welcome views that guide users through setup.
  */
-async function updateWelcomeViewContext(cli: BoundaryCLI, config: ConfigurationService): Promise<boolean> {
+async function updateWelcomeViewContext(container: IServiceContainer): Promise<boolean> {
+  const cli = container.cli;
+  const config = container.config;
+
   // Check CLI installation
   const cliInstalled = await cli.checkInstalled();
   await vscode.commands.executeCommand('setContext', 'boundary.cliInstalled', cliInstalled);
@@ -58,49 +87,53 @@ async function updateWelcomeViewContext(cli: BoundaryCLI, config: ConfigurationS
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   logger.info('Activating Boundary extension');
 
+  // Create service container with all dependencies
+  serviceContainer = createServiceContainer(context, createServiceFactories());
+  setGlobalContainer(serviceContainer);
+
   // Initialize configuration
-  const config = getConfigurationService();
+  const config = serviceContainer.config;
   const logLevel = (process.env.BOUNDARY_LOG_LEVEL || config.get('logLevel')) as LogLevel;
   logger.setLogLevel(logLevel);
   logger.debug('Extension activation started with log level:', logLevel);
 
   // Listen for config changes (log level + welcome view context)
-  const cli = getBoundaryCLI();
   context.subscriptions.push(
     config.onConfigurationChanged(async cfg => {
       logger.setLogLevel(cfg.logLevel);
       // Re-evaluate welcome view context when config changes
-      await updateWelcomeViewContext(cli, config);
+      await updateWelcomeViewContext(serviceContainer);
     })
   );
 
   // Set welcome view context values (CLI installed, address configured)
   // This enables smart welcome views that guide users through setup
-  const cliInstalled = await updateWelcomeViewContext(cli, config);
+  const cliInstalled = await updateWelcomeViewContext(serviceContainer);
 
   if (cliInstalled) {
-    const version = await cli.getVersion();
+    const version = await serviceContainer.cli.getVersion();
     logger.info('Boundary CLI version:', version || 'unknown');
   } else {
     logger.warn('Boundary CLI not found - welcome view will guide installation');
   }
 
-  // Initialize auth manager (uses AuthStateManager internally)
-  authManager = createAuthManager(context);
+  // Initialize auth manager from container
+  authManager = serviceContainer.auth;
   context.subscriptions.push(authManager);
 
   // Initialize auth state BEFORE creating TargetProvider to avoid race condition
   // TargetProvider subscribes to auth state changes, so we need auth state resolved first
-  await authManager.initialize();
-  logger.debug('Auth initialization complete, state:', authManager.state);
+  await (authManager as AuthManager).initialize();
+  logger.debug('Auth initialization complete, state:', (authManager as AuthManager).state);
 
-  // Initialize target provider (after auth init to prevent race condition)
-  targetProvider = createTargetProvider();
+  // Initialize target provider with injected dependencies (after auth init to prevent race condition)
+  targetProvider = new TargetProvider(serviceContainer.targets, serviceContainer.authState);
   targetProvider.setAuthManager(authManager); // Wire up for token expiration handling
+  targetProvider.initialize(); // Set up event subscriptions
   context.subscriptions.push(targetProvider);
 
   // Auto-fetch targets if already authenticated (since state change fired before subscription)
-  if (authManager.state === 'authenticated') {
+  if ((authManager as AuthManager).state === 'authenticated') {
     targetProvider.refresh();
   }
 
@@ -126,11 +159,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerFileDecorationProvider(decorationProvider)
   );
 
-  // Wire up connection manager to status bar
-  const connectionManager = getConnectionManager();
-  // Initialize connection manager with globalState for username persistence
-  connectionManager.setGlobalState(context.globalState);
-  const statusBar = getStatusBarManager();
+  // Wire up connection manager (from container) to status bar
+  const connectionManager = serviceContainer.connections;
+  const statusBar = serviceContainer.statusBar;
 
   context.subscriptions.push(
     connectionManager.onSessionsChanged(sessions => {
@@ -253,7 +284,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
   // Disconnect all command
   context.subscriptions.push(
     vscode.commands.registerCommand('boundary.disconnectAll', async () => {
-      const connectionManager = getConnectionManager();
+      const connectionManager = serviceContainer.connections;
       const count = connectionManager.getSessionCount();
 
       if (count === 0) {
@@ -286,8 +317,8 @@ function registerCommands(context: vscode.ExtensionContext): void {
  * Connect to a target
  */
 async function connectToTarget(target: BoundaryTarget): Promise<void> {
-  const statusBar = getStatusBarManager();
-  const connectionManager = getConnectionManager();
+  const statusBar = serviceContainer.statusBar;
+  const connectionManager = serviceContainer.connections;
 
   statusBar.showConnecting(target.name);
 
@@ -338,11 +369,18 @@ export function deactivate(): void {
   // Clean up any remaining SSH config entries (fire and forget)
   void cleanupBoundarySSHConfigEntries();
 
-  // Dispose all singletons in reverse order of creation
-  disposeConnectionManager();
-  disposeStatusBarManager();
+  // Dispose service container (handles all DI-managed services)
+  if (serviceContainer) {
+    disposeServiceContainer(serviceContainer);
+  }
+
+  // Dispose remaining singletons not managed by container
   disposeSessionsPanelProvider();
   disposeTargetDecorationProvider();
+
+  // Dispose legacy singletons (for backward compatibility during migration)
+  disposeConnectionManager();
+  disposeStatusBarManager();
   disposeTargetService();
   disposeBoundaryCLI();
   disposeAuthStateManager();

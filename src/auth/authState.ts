@@ -140,6 +140,16 @@ export class AuthStateManager implements IAuthStateManager {
 // Singleton instance
 let stateManagerInstance: AuthStateManager | undefined;
 
+/**
+ * Create a new AuthStateManager instance (for DI)
+ */
+export function createAuthStateManager(): AuthStateManager {
+  return new AuthStateManager();
+}
+
+/**
+ * Get the singleton AuthStateManager instance (for backward compatibility)
+ */
 export function getAuthStateManager(): AuthStateManager {
   if (!stateManagerInstance) {
     stateManagerInstance = new AuthStateManager();
