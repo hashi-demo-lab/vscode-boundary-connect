@@ -3,7 +3,7 @@
  */
 
 import * as vscode from 'vscode';
-import { spawn, ChildProcess, exec } from 'child_process';
+import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
 import {
   AuthMethod,
@@ -33,7 +33,7 @@ import {
   parseTargetsResponse,
 } from './parser';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const CONNECT_TIMEOUT_MS = 30000; // 30 seconds to capture port
 
@@ -83,7 +83,7 @@ export class BoundaryCLI implements IBoundaryCLI {
     for (const cliPath of COMMON_CLI_PATHS) {
       try {
         logger.debug(`Checking for Boundary CLI at: ${cliPath}`);
-        await execAsync(`"${cliPath}" version`, { timeout: 5000 });
+        await execFileAsync(cliPath, ['version'], { timeout: 5000 });
         logger.info(`Found Boundary CLI at: ${cliPath}`);
         return cliPath;
       } catch (err) {
@@ -118,7 +118,7 @@ export class BoundaryCLI implements IBoundaryCLI {
     if (configuredPath && configuredPath !== 'boundary') {
       try {
         logger.debug(`Verifying configured path: ${configuredPath}`);
-        await execAsync(`"${configuredPath}" version`, { timeout: 5000 });
+        await execFileAsync(configuredPath, ['version'], { timeout: 5000 });
         logger.info(`Using configured CLI path: ${configuredPath}`);
         this.cliPathResolved = true;
         this.cliPathResolutionFailed = false;
@@ -237,18 +237,20 @@ export class BoundaryCLI implements IBoundaryCLI {
    */
   private async executeWithPassword(args: string[], password: string, timeoutMs = 30000): Promise<CLIExecutionResult> {
     const cliPath = this.cliPath;
-    const command = `"${cliPath}" ${args.map(a => `"${a}"`).join(' ')} -password env://BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD`;
     const baseEnv = this.getCliEnv();
     const env: NodeJS.ProcessEnv = {
       ...baseEnv,
       BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD: password,
     };
 
+    // Add the password flag to args
+    const fullArgs = [...args, '-password', 'env://BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD'];
+
     logger.debug(`Executing (with password via env): ${cliPath} ${args.join(' ')} -password env://...`);
     logger.debug(`Environment: BOUNDARY_ADDR=${baseEnv.BOUNDARY_ADDR || ''}, BOUNDARY_TLS_INSECURE=${baseEnv.BOUNDARY_TLS_INSECURE || ''}`);
 
     try {
-      const { stdout, stderr } = await execAsync(command, {
+      const { stdout, stderr } = await execFileAsync(cliPath, fullArgs, {
         env,
         maxBuffer: 10 * 1024 * 1024,
         timeout: timeoutMs,
@@ -486,14 +488,13 @@ export class BoundaryCLI implements IBoundaryCLI {
    */
   private async execute(args: string[], timeoutMs = 30000): Promise<CLIExecutionResult> {
     const cliPath = this.cliPath;
-    const command = `"${cliPath}" ${args.map(a => `"${a}"`).join(' ')}`;
     const env = this.getCliEnv();
 
     logger.debug(`Executing: ${cliPath} ${args.join(' ')}`);
     logger.debug(`Environment: BOUNDARY_ADDR=${env.BOUNDARY_ADDR}, BOUNDARY_TLS_INSECURE=${env.BOUNDARY_TLS_INSECURE}`);
 
     try {
-      const { stdout, stderr } = await execAsync(command, {
+      const { stdout, stderr } = await execFileAsync(cliPath, args, {
         env,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
         timeout: timeoutMs,
@@ -505,7 +506,7 @@ export class BoundaryCLI implements IBoundaryCLI {
         exitCode: 0,
       };
     } catch (error: unknown) {
-      // exec throws on non-zero exit
+      // execFile throws on non-zero exit
       if (error && typeof error === 'object' && 'code' in error) {
         const execError = error as { code: number | string; stdout?: string; stderr?: string; message: string };
 

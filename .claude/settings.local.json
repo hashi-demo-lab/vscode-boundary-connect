@@ -65,7 +65,10 @@
       "Bash(boundary --help)",
       "Bash(npm run compile:*)",
       "Bash(npm run package:*)",
-      "Bash(code --install-extension:*)"
+      "Bash(code --install-extension:*)",
+      "Bash(node -e:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run lint:*)"
     ],
     "deny": [
       "Write(.gitignore)",
