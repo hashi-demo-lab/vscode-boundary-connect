@@ -8,6 +8,7 @@ import { IStatusBarManager } from '../types';
 export class StatusBarManager implements IStatusBarManager {
   private statusBarItem: vscode.StatusBarItem;
   private sessionCount = 0;
+  private errorTimeout: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -39,13 +40,20 @@ export class StatusBarManager implements IStatusBarManager {
   }
 
   showError(message: string): void {
+    // Clear any existing error timeout to prevent memory leaks
+    if (this.errorTimeout) {
+      clearTimeout(this.errorTimeout);
+      this.errorTimeout = undefined;
+    }
+
     this.statusBarItem.text = `$(error) Boundary: ${message}`;
     this.statusBarItem.tooltip = message;
     this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     this.statusBarItem.show();
 
     // Reset after 5 seconds
-    setTimeout(() => {
+    this.errorTimeout = setTimeout(() => {
+      this.errorTimeout = undefined;
       this.updateSessionCount(this.sessionCount);
     }, 5000);
   }
@@ -59,6 +67,11 @@ export class StatusBarManager implements IStatusBarManager {
   }
 
   dispose(): void {
+    // Clear any pending timeout to prevent memory leaks
+    if (this.errorTimeout) {
+      clearTimeout(this.errorTimeout);
+      this.errorTimeout = undefined;
+    }
     this.statusBarItem.dispose();
   }
 }

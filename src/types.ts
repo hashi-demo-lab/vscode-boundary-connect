@@ -95,6 +95,15 @@ export interface BoundaryTarget {
 // CLI Types
 // ============================================================================
 
+/**
+ * Result type for token retrieval - distinguishes between
+ * "no token", "token found", and "CLI error"
+ */
+export type TokenResult =
+  | { status: 'found'; token: string }
+  | { status: 'not_found' }
+  | { status: 'cli_error'; error: string };
+
 export interface CLIExecutionResult {
   stdout: string;
   stderr: string;
@@ -125,7 +134,7 @@ export interface IBoundaryCLI extends vscode.Disposable {
   checkInstalled(): Promise<boolean>;
   getVersion(): Promise<string | undefined>;
   authenticate(method: AuthMethod, credentials?: Credentials): Promise<AuthResult>;
-  getToken(): Promise<string | undefined>;
+  getToken(): Promise<TokenResult>;
   listAuthMethods(scopeId?: string): Promise<BoundaryAuthMethod[]>;
   listTargets(scopeId?: string, recursive?: boolean): Promise<BoundaryTarget[]>;
   listScopes(parentScopeId?: string): Promise<BoundaryScope[]>;

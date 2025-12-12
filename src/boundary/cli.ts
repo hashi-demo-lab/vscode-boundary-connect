@@ -18,6 +18,7 @@ import {
   IBoundaryCLI,
   PasswordCredentials,
   SessionAuthorization,
+  TokenResult,
 } from '../types';
 import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
 import { logger } from '../utils/logger';
@@ -293,19 +294,24 @@ export class BoundaryCLI implements IBoundaryCLI {
     }
   }
 
-  async getToken(): Promise<string | undefined> {
+  async getToken(): Promise<TokenResult> {
     try {
       const result = await this.execute(['config', 'get-token']);
       const token = result.stdout.trim();
-      return token || undefined;
-    } catch (error) {
-      // Log for debugging - this is a common failure point on first install
-      if (error instanceof BoundaryError && error.code === BoundaryErrorCode.CLI_NOT_FOUND) {
-        logger.debug('Cannot check token: Boundary CLI not found');
-      } else {
-        logger.debug('Failed to retrieve token from CLI keyring:', error);
+      if (token) {
+        return { status: 'found', token };
       }
-      return undefined;
+      return { status: 'not_found' };
+    } catch (error) {
+      // Distinguish CLI errors from "no token" - critical for first-install UX
+      if (error instanceof BoundaryError && error.code === BoundaryErrorCode.CLI_NOT_FOUND) {
+        logger.warn('Cannot check token: Boundary CLI not found');
+        return { status: 'cli_error', error: 'Boundary CLI not found. Please install it.' };
+      }
+
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.warn('Failed to retrieve token from CLI keyring:', error);
+      return { status: 'cli_error', error: errorMessage };
     }
   }
 
@@ -545,13 +551,18 @@ export class BoundaryCLI implements IBoundaryCLI {
       logger.info(`Killing process for session ${sessionId}`);
       process.kill('SIGTERM');
 
-      // Force kill after timeout
-      setTimeout(() => {
+      // Force kill after timeout if process doesn't exit
+      const forceKillTimeout = setTimeout(() => {
         if (!process.killed) {
           logger.warn(`Force killing process for session ${sessionId}`);
           process.kill('SIGKILL');
         }
       }, 5000);
+
+      // Clear timeout when process exits to prevent memory leak
+      process.once('exit', () => {
+        clearTimeout(forceKillTimeout);
+      });
 
       this.activeProcesses.delete(sessionId);
       return true;

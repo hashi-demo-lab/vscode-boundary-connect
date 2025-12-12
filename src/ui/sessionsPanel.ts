@@ -100,11 +100,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Boundary Sessions</title>
   <style>
-    /* CSS Custom Properties - Boundary Brand */
+    /* CSS Custom Properties - Boundary Brand (Coral/Salmon Theme) */
     :root {
-      --boundary-primary: #7C3AED;
-      --boundary-primary-hover: #6D28D9;
-      --boundary-accent: #EC4899;
+      --boundary-primary: #E76F51;
+      --boundary-primary-hover: #D4644A;
+      --boundary-accent: #F4A261;
       --boundary-success: #10B981;
       --boundary-warning: #F59E0B;
       --boundary-danger: #EF4444;
@@ -143,7 +143,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
       align-items: center;
       justify-content: space-between;
       padding: 10px 14px;
-      background: linear-gradient(135deg, #9333EA 0%, #EC4899 50%, #F472B6 100%);
+      background: linear-gradient(135deg, #F4A261 0%, #E9967A 50%, #E76F51 100%);
       border-radius: var(--radius-md);
       margin-bottom: 16px;
       color: white;

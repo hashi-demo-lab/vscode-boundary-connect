@@ -48,29 +48,44 @@ export class AuthManager implements IAuthManager {
   private async doInitialize(): Promise<void> {
     logger.info('Initializing auth state...');
 
-    try {
-      const cli = getBoundaryCLI();
-      const token = await cli.getToken();
-      const hasToken = !!token;
+    const cli = getBoundaryCLI();
+    const tokenResult = await cli.getToken();
 
-      logger.info(`Initial auth check: ${hasToken ? 'token found' : 'no token'}`);
-      this.stateManager.dispatch({ type: 'INIT_COMPLETE', hasToken });
-    } catch (error) {
-      logger.error('Auth initialization failed:', error);
-      this.stateManager.dispatch({
-        type: 'AUTH_ERROR',
-        error: error instanceof Error ? error.message : String(error),
-      });
+    switch (tokenResult.status) {
+      case 'found':
+        logger.info('Initial auth check: token found');
+        this.stateManager.dispatch({ type: 'INIT_COMPLETE', hasToken: true });
+        break;
 
-      // Notify user of initialization failure
-      void vscode.window.showWarningMessage(
-        'Boundary extension initialization failed. Some features may not work.',
-        'View Logs'
-      ).then(action => {
-        if (action === 'View Logs') {
-          logger.show();
-        }
-      });
+      case 'not_found':
+        logger.info('Initial auth check: no token');
+        this.stateManager.dispatch({ type: 'INIT_COMPLETE', hasToken: false });
+        break;
+
+      case 'cli_error':
+        // Critical: Don't treat CLI errors as "unauthenticated"
+        // This was causing the first-install bug
+        logger.error('Auth initialization failed - CLI error:', tokenResult.error);
+        this.stateManager.dispatch({
+          type: 'AUTH_ERROR',
+          error: tokenResult.error,
+        });
+
+        // Show prominent warning so users understand why auth isn't working
+        void vscode.window.showWarningMessage(
+          `Boundary: ${tokenResult.error}`,
+          'Install CLI',
+          'View Logs'
+        ).then(action => {
+          if (action === 'Install CLI') {
+            void vscode.env.openExternal(
+              vscode.Uri.parse('https://developer.hashicorp.com/boundary/downloads')
+            );
+          } else if (action === 'View Logs') {
+            logger.show();
+          }
+        });
+        break;
     }
   }
 
@@ -160,20 +175,25 @@ export class AuthManager implements IAuthManager {
 
   /**
    * Get token from CLI keyring (read-only, no side effects)
-   * Returns undefined if not authenticated
+   * Returns undefined if not authenticated or on error
    */
   async getToken(): Promise<string | undefined> {
     if (!this.stateManager.isAuthenticated) {
       return undefined;
     }
 
-    try {
-      const cli = getBoundaryCLI();
-      return await cli.getToken();
-    } catch (error) {
-      logger.error('Failed to get token:', error);
-      return undefined;
+    const cli = getBoundaryCLI();
+    const result = await cli.getToken();
+
+    if (result.status === 'found') {
+      return result.token;
     }
+
+    if (result.status === 'cli_error') {
+      logger.error('Failed to get token:', result.error);
+    }
+
+    return undefined;
   }
 
   /**
@@ -181,26 +201,27 @@ export class AuthManager implements IAuthManager {
    * Updates state if token is invalid
    */
   async verifyToken(): Promise<boolean> {
-    try {
-      const cli = getBoundaryCLI();
-      const token = await cli.getToken();
+    const cli = getBoundaryCLI();
+    const result = await cli.getToken();
 
-      if (!token) {
+    switch (result.status) {
+      case 'found':
+        // Token exists - if we weren't authenticated, update state
+        if (!this.stateManager.isAuthenticated) {
+          this.stateManager.dispatch({ type: 'INIT_COMPLETE', hasToken: true });
+        }
+        return true;
+
+      case 'not_found':
         if (this.stateManager.isAuthenticated) {
           this.stateManager.dispatch({ type: 'TOKEN_EXPIRED' });
         }
         return false;
-      }
 
-      // Token exists - if we weren't authenticated, update state
-      if (!this.stateManager.isAuthenticated) {
-        this.stateManager.dispatch({ type: 'INIT_COMPLETE', hasToken: true });
-      }
-
-      return true;
-    } catch (error) {
-      logger.error('Token verification failed:', error);
-      return false;
+      case 'cli_error':
+        logger.error('Token verification failed - CLI error:', result.error);
+        // Don't change auth state on CLI errors - might be temporary
+        return false;
     }
   }
 
