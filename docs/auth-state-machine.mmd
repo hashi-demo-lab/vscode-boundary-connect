@@ -1,0 +1,88 @@
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#7C3AED',
+    'primaryTextColor': '#FFFFFF',
+    'primaryBorderColor': '#5B21B6',
+    'secondaryColor': '#10B981',
+    'lineColor': '#6B7280',
+    'textColor': '#1F2937',
+    'mainBkg': '#FFFFFF',
+    'nodeBorder': '#D1D5DB',
+    'clusterBkg': '#F9FAFB',
+    'clusterBorder': '#D1D5DB',
+    'transitionColor': '#6B7280',
+    'transitionLabelColor': '#374151',
+    'stateBkg': '#FFFFFF',
+    'stateLabelColor': '#1F2937',
+    'edgeLabelBackground': '#FFFFFF',
+    'compositeBackground': '#F9FAFB',
+    'compositeBorder': '#E5E7EB',
+    'compositeTitleBackground': '#F3F4F6'
+  },
+  'state': {
+    'padding': 12,
+    'dividerMargin': 8,
+    'sizeUnit': 5,
+    'textHeight': 10,
+    'titleShift': -12
+  }
+}}%%
+
+%% BOUNDARY VS CODE EXTENSION — AUTH STATE MACHINE
+
+stateDiagram-v2
+    direction LR
+
+    [*] --> initializing: Extension Activates
+
+    state initializing {
+        [*] --> checking
+        checking: Checking keyring for token
+    }
+
+    state unauthenticated {
+        [*] --> waiting
+        waiting: No valid token
+    }
+
+    state authenticating {
+        [*] --> in_progress
+        in_progress: OIDC or Password flow
+    }
+
+    state authenticated {
+        [*] --> active
+        active: Valid token - can access targets
+    }
+
+    state expired {
+        [*] --> invalid
+        invalid: Token expired
+    }
+
+    state error {
+        [*] --> failed
+        failed: System error
+    }
+
+    initializing --> authenticated: INIT_COMPLETE (hasToken)
+    initializing --> unauthenticated: INIT_COMPLETE (no token)
+    initializing --> error: AUTH_ERROR
+
+    unauthenticated --> authenticating: LOGIN_START
+    unauthenticated --> authenticated: Token found
+
+    authenticating --> authenticated: LOGIN_SUCCESS
+    authenticating --> unauthenticated: LOGIN_FAILURE
+    authenticating --> error: AUTH_ERROR
+
+    authenticated --> expired: TOKEN_EXPIRED
+    authenticated --> unauthenticated: LOGOUT
+    authenticated --> authenticating: Re-auth
+
+    expired --> authenticating: LOGIN_START
+    expired --> unauthenticated: LOGOUT
+
+    error --> unauthenticated: Recovery
+    error --> authenticating: Retry

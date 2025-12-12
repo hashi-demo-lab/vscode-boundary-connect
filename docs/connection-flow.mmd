@@ -1,0 +1,137 @@
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#10B981',
+    'primaryTextColor': '#FFFFFF',
+    'primaryBorderColor': '#047857',
+    'secondaryColor': '#7C3AED',
+    'lineColor': '#6B7280',
+    'textColor': '#1F2937',
+    'actorBkg': '#10B981',
+    'actorBorder': '#047857',
+    'actorTextColor': '#FFFFFF',
+    'actorLineColor': '#9CA3AF',
+    'signalColor': '#374151',
+    'signalTextColor': '#1F2937',
+    'labelBoxBkgColor': '#F3F4F6',
+    'labelBoxBorderColor': '#D1D5DB',
+    'labelTextColor': '#1F2937',
+    'loopTextColor': '#374151',
+    'noteBorderColor': '#D1D5DB',
+    'noteBkgColor': '#F9FAFB',
+    'noteTextColor': '#1F2937',
+    'activationBorderColor': '#10B981',
+    'activationBkgColor': '#D1FAE5',
+    'sequenceNumberColor': '#FFFFFF'
+  },
+  'sequence': {
+    'diagramMarginX': 30,
+    'diagramMarginY': 20,
+    'actorMargin': 50,
+    'width': 130,
+    'height': 50,
+    'boxMargin': 8,
+    'boxTextMargin': 4,
+    'noteMargin': 8,
+    'messageMargin': 30,
+    'mirrorActors': false,
+    'showSequenceNumbers': true,
+    'wrap': true,
+    'wrapPadding': 10
+  }
+}}%%
+
+%% BOUNDARY VS CODE EXTENSION — CONNECTION FLOW
+
+sequenceDiagram
+    autonumber
+
+    participant U as User
+    participant EXT as Extension
+    participant CM as ConnManager
+    participant CLI as BoundaryCLI
+    participant BC as Boundary CLI
+    participant BS as Server
+    participant WK as Worker
+    participant RSSH as RemoteSSH
+    participant CFG as SSH Config
+    participant VSC as VS Code
+
+    rect rgb(243, 244, 246)
+        Note over U,BS: PHASE 1: Target Selection
+
+        U->>EXT: Click Connect on target
+        EXT->>CM: connect(target)
+        CM->>CLI: authorizeSession(targetId)
+        CLI->>BC: boundary authorize-session
+        BC->>BS: POST /targets/authorize-session
+        BS-->>BC: SessionAuthorization + Credentials
+        BC-->>CLI: JSON response
+        CLI-->>CM: credentials[]
+
+        alt Has brokered credentials
+            CM-->>CM: Extract username
+        else No credentials
+            CM->>U: Enter SSH username
+            U-->>CM: username
+            CM-->>CM: Cache username
+        end
+    end
+
+    rect rgb(236, 253, 245)
+        Note over CM,WK: PHASE 2: Establish Proxy
+
+        CM->>CLI: connect(targetId)
+        CLI->>BC: spawn boundary connect
+        BC->>BS: Initiate session
+        BS->>WK: Route to worker
+        WK-->>BS: Ready
+        BS-->>BC: Session established
+        BC-->>CLI: Proxy on 127.0.0.1:54321
+
+        CLI-->>CM: Connection { port: 54321 }
+        CM->>CM: createSession()
+        CM->>CM: Store in sessions map
+        CM->>EXT: onSessionsChanged.fire()
+    end
+
+    rect rgb(239, 246, 255)
+        Note over CM,VSC: PHASE 3: Remote SSH
+
+        CM->>RSSH: triggerRemoteSSH(host, port, user)
+        RSSH->>RSSH: isRemoteSSHInstalled()
+
+        alt Not installed
+            RSSH->>U: Install Remote SSH?
+            U-->>RSSH: Install
+            RSSH->>VSC: Install extension
+        end
+
+        RSSH->>RSSH: generateHostAlias()
+        RSSH->>CFG: Read existing config
+        RSSH->>CFG: Write new host entry
+        Note over CFG: Host boundary-target-54321<br/>HostName 127.0.0.1<br/>Port 54321<br/>User ubuntu
+
+        RSSH->>VSC: openFolder(ssh-remote+alias)
+        VSC->>CFG: Read SSH config
+        VSC->>BC: SSH via localhost:54321
+        BC->>WK: Forward traffic
+        WK->>WK: Route to target
+        VSC-->>RSSH: Window opened
+
+        CM-->>EXT: Session active
+        EXT->>U: Connected to target
+    end
+
+    rect rgb(254, 242, 242)
+        Note over U,WK: PHASE 4: Disconnect
+
+        U->>EXT: boundary.disconnect
+        EXT->>CM: disconnect(sessionId)
+        CM->>CM: terminateSession()
+        CM->>BC: process.kill(SIGTERM)
+        BC-->>CM: Process exits
+        CM->>CM: Remove from sessions
+        CM->>EXT: onSessionsChanged.fire()
+        Note over EXT: Update UI
+    end

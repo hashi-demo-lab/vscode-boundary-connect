@@ -1,0 +1,128 @@
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#7C3AED',
+    'primaryTextColor': '#FFFFFF',
+    'primaryBorderColor': '#5B21B6',
+    'secondaryColor': '#10B981',
+    'secondaryTextColor': '#FFFFFF',
+    'secondaryBorderColor': '#047857',
+    'tertiaryColor': '#F3F4F6',
+    'tertiaryTextColor': '#374151',
+    'lineColor': '#6B7280',
+    'textColor': '#1F2937',
+    'mainBkg': '#FFFFFF',
+    'nodeBorder': '#D1D5DB',
+    'clusterBkg': '#F9FAFB',
+    'clusterBorder': '#D1D5DB',
+    'titleColor': '#111827',
+    'edgeLabelBackground': '#FFFFFF',
+    'nodeTextColor': '#1F2937'
+  },
+  'flowchart': {
+    'curve': 'monotoneX',
+    'padding': 30,
+    'nodeSpacing': 60,
+    'rankSpacing': 80,
+    'htmlLabels': true,
+    'useMaxWidth': false
+  }
+}}%%
+
+%% BOUNDARY VS CODE EXTENSION — ARCHITECTURE OVERVIEW
+
+graph TB
+    %% EXTENSION ENTRY
+    EXT["<b>Extension Entry</b><br/>extension.ts"]
+
+    %% AUTHENTICATION
+    subgraph AUTH["<b>Authentication</b>"]
+        direction LR
+        AM["AuthManager"]
+        ASM["AuthStateManager"]
+        OIDC["OIDC Auth"]
+        PWD["Password Auth"]
+    end
+
+    %% TARGETS
+    subgraph TARGETS["<b>Target Management</b>"]
+        direction LR
+        TP["TargetProvider"]
+        TS["TargetService"]
+    end
+
+    %% CONNECTIONS
+    subgraph CONN["<b>Connections</b>"]
+        direction LR
+        CM["ConnectionManager"]
+        SESS["Session"]
+        SSH["RemoteSSH"]
+    end
+
+    %% CLI
+    subgraph CLI_LAYER["<b>Boundary CLI</b>"]
+        direction LR
+        CLI["BoundaryCLI"]
+        PROC["ChildProcess"]
+    end
+
+    %% UI
+    subgraph UI["<b>User Interface</b>"]
+        direction LR
+        SB["StatusBar"]
+        SP["SessionsPanel"]
+        QP["QuickPick"]
+    end
+
+    %% EXTERNAL
+    subgraph EXTERNAL["<b>External Systems</b>"]
+        direction LR
+        BC["Boundary CLI"]
+        KR["Keyring"]
+        BS["Boundary Server"]
+        RSSH["Remote SSH Ext"]
+    end
+
+    %% MAIN CONNECTIONS
+    EXT --> AUTH
+    EXT --> TARGETS
+    EXT --> CONN
+    EXT --> UI
+
+    AM --> ASM
+    OIDC --> AM
+    PWD --> AM
+    AM --> CLI
+    TP --> TS
+    TS --> CLI
+    CM --> CLI
+    CM --> SESS
+    CM --> SSH
+    CLI --> PROC
+
+    ASM -.->|state| TP
+    SB -.->|events| CM
+    SP -.->|events| CM
+
+    CLI ==> BC
+    BC --> KR
+    BC ==> BS
+    SSH ==> RSSH
+    PROC ==> BS
+
+    %% STYLING
+    classDef entryNode fill:#7C3AED,stroke:#5B21B6,stroke-width:3px,color:#FFFFFF
+    classDef authNode fill:#6366F1,stroke:#4338CA,stroke-width:2px,color:#FFFFFF
+    classDef targetNode fill:#0EA5E9,stroke:#0369A1,stroke-width:2px,color:#FFFFFF
+    classDef connNode fill:#10B981,stroke:#047857,stroke-width:2px,color:#FFFFFF
+    classDef cliNode fill:#F59E0B,stroke:#B45309,stroke-width:2px,color:#FFFFFF
+    classDef uiNode fill:#EC4899,stroke:#BE185D,stroke-width:2px,color:#FFFFFF
+    classDef externalNode fill:#F3F4F6,stroke:#9CA3AF,stroke-width:2px,color:#374151
+
+    class EXT entryNode
+    class AM,ASM,OIDC,PWD authNode
+    class TP,TS targetNode
+    class CM,SESS,SSH connNode
+    class CLI,PROC cliNode
+    class SB,SP,QP uiNode
+    class BC,KR,BS,RSSH externalNode

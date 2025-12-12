@@ -1,0 +1,143 @@
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#7C3AED',
+    'primaryTextColor': '#FFFFFF',
+    'primaryBorderColor': '#5B21B6',
+    'secondaryColor': '#10B981',
+    'secondaryTextColor': '#FFFFFF',
+    'secondaryBorderColor': '#047857',
+    'tertiaryColor': '#F3F4F6',
+    'tertiaryTextColor': '#374151',
+    'lineColor': '#6B7280',
+    'textColor': '#1F2937',
+    'mainBkg': '#FFFFFF',
+    'nodeBorder': '#D1D5DB',
+    'clusterBkg': '#F9FAFB',
+    'clusterBorder': '#D1D5DB',
+    'titleColor': '#111827',
+    'edgeLabelBackground': '#FFFFFF',
+    'nodeTextColor': '#1F2937'
+  },
+  'flowchart': {
+    'curve': 'monotoneX',
+    'padding': 25,
+    'nodeSpacing': 50,
+    'rankSpacing': 70,
+    'htmlLabels': true,
+    'useMaxWidth': false
+  }
+}}%%
+
+%% BOUNDARY VS CODE EXTENSION — COMPONENT DIAGRAM
+
+flowchart TB
+    %% EXTENSION CORE
+    subgraph CORE["<b>Extension Core</b>"]
+        EXT["<b>extension.ts</b><br/>activate / deactivate<br/>registerCommands"]
+    end
+
+    %% AUTHENTICATION
+    subgraph AUTH["<b>Authentication</b>"]
+        AM["<b>authManager.ts</b><br/>login / logout<br/>getToken"]
+        ASM["<b>authState.ts</b><br/>AuthStateManager<br/>dispatch events"]
+        OIDC["<b>oidcAuth.ts</b><br/>executeOidcAuth<br/>discoverMethods"]
+        PWD["<b>passwordAuth.ts</b><br/>executePasswordAuth"]
+    end
+
+    %% BOUNDARY CLI
+    subgraph CLI_MOD["<b>Boundary CLI</b>"]
+        CLI["<b>cli.ts</b><br/>authenticate / listTargets<br/>connect / getToken"]
+        PARSER["<b>parser.ts</b><br/>parseTargets<br/>parseAuthResponse"]
+    end
+
+    %% TARGETS
+    subgraph TARGETS["<b>Target Management</b>"]
+        TP["<b>targetProvider.ts</b><br/>TreeDataProvider<br/>getChildren / refresh"]
+        TS["<b>targetService.ts</b><br/>getAllTargets<br/>groupByScope"]
+        TI["<b>targetItem.ts</b><br/>TargetTreeItem"]
+    end
+
+    %% CONNECTIONS
+    subgraph CONN["<b>Connections</b>"]
+        CM["<b>connectionManager.ts</b><br/>connect / disconnect<br/>getActiveSessions"]
+        SESS["<b>session.ts</b><br/>createSession<br/>terminateSession"]
+        RSSH["<b>remoteSSH.ts</b><br/>triggerRemoteSSH<br/>ensureSSHConfig"]
+    end
+
+    %% UI
+    subgraph UI["<b>User Interface</b>"]
+        SB["<b>statusBar.ts</b><br/>updateSessionCount"]
+        SP["<b>sessionsPanel.ts</b><br/>WebviewProvider"]
+        QP["<b>quickPick.ts</b><br/>showTargetPicker"]
+    end
+
+    %% UTILITIES
+    subgraph UTILS["<b>Utilities</b>"]
+        CFG["<b>config.ts</b><br/>getConfiguration"]
+        LOG["<b>logger.ts</b><br/>Logger singleton"]
+        ERR["<b>errors.ts</b><br/>BoundaryError"]
+    end
+
+    %% EXTERNAL
+    subgraph EXTERNAL["<b>External Systems</b>"]
+        BC["Boundary CLI executable"]
+        KR["System Keyring"]
+        BS["Boundary Server"]
+        VSR["VS Code Remote SSH"]
+    end
+
+    %% CONNECTIONS
+    EXT --> AM
+    EXT --> TP
+    EXT --> CM
+    EXT --> SB
+    EXT --> SP
+    EXT --> CFG
+
+    AM --> ASM
+    OIDC --> AM
+    PWD --> AM
+    AM --> CLI
+
+    CLI --> PARSER
+    TP --> TS
+    TP --> TI
+    TS --> CLI
+
+    CM --> SESS
+    CM --> RSSH
+    CM --> CLI
+
+    SB -.-> CM
+    SP -.-> CM
+    QP --> TS
+    TP -.-> ASM
+
+    CLI ==> BC
+    BC --> KR
+    BC ==> BS
+    RSSH ==> VSR
+
+    CLI --> CFG
+    CLI --> ERR
+    AM --> CFG
+
+    %% STYLING
+    classDef core fill:#7C3AED,stroke:#5B21B6,stroke-width:3px,color:#FFFFFF
+    classDef auth fill:#6366F1,stroke:#4338CA,stroke-width:2px,color:#FFFFFF
+    classDef cli fill:#F59E0B,stroke:#B45309,stroke-width:2px,color:#FFFFFF
+    classDef target fill:#0EA5E9,stroke:#0369A1,stroke-width:2px,color:#FFFFFF
+    classDef conn fill:#10B981,stroke:#047857,stroke-width:2px,color:#FFFFFF
+    classDef ui fill:#EC4899,stroke:#BE185D,stroke-width:2px,color:#FFFFFF
+    classDef util fill:#6B7280,stroke:#4B5563,stroke-width:2px,color:#FFFFFF
+    classDef external fill:#F3F4F6,stroke:#9CA3AF,stroke-width:2px,color:#374151
+
+    class EXT core
+    class AM,ASM,OIDC,PWD auth
+    class CLI,PARSER cli
+    class TP,TS,TI target
+    class CM,SESS,RSSH conn
+    class SB,SP,QP ui
+    class CFG,LOG,ERR util
+    class BC,KR,BS,VSR external
