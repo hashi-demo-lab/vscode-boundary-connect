@@ -1,7 +1,6 @@
 {
   "boundary.addr": "https://boundary.local",
   "boundary.tlsInsecure": true,
-  "boundary.keyringType": "none",
   "boundary.defaultAuthMethod": "oidc",
   "boundary.logLevel": "debug"
 }

@@ -143,8 +143,10 @@ describe('Boundary Parser', () => {
       expect(result.token).toBe('at_1234567890abcdef');
     });
 
-    it('should throw on invalid JSON', () => {
-      expect(() => parseAuthResponse('invalid json')).toThrow();
+    it('should return error for invalid JSON', () => {
+      const result = parseAuthResponse('invalid json');
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
     });
   });
 

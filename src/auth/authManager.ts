@@ -1,67 +1,72 @@
 /**
  * Authentication Manager for Boundary
+ *
+ * Design principles:
+ * 1. CLI keyring is the single source of truth for tokens
+ * 2. AuthStateManager handles all state transitions
+ * 3. This class orchestrates auth operations, not state
+ * 4. No duplicate token storage - CLI manages tokens
  */
 
 import * as vscode from 'vscode';
 import { AuthMethod, AuthResult, Credentials, IAuthManager } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
-
-const TOKEN_KEY = 'boundary.authToken';
-const USER_ID_KEY = 'boundary.userId';
-const EXPIRATION_KEY = 'boundary.tokenExpiration';
+import { AuthStateManager, getAuthStateManager } from './authState';
 
 export class AuthManager implements IAuthManager {
-  private readonly _onAuthStateChanged = new vscode.EventEmitter<boolean>();
-  readonly onAuthStateChanged = this._onAuthStateChanged.event;
+  private readonly stateManager: AuthStateManager;
+  private initPromise: Promise<void> | undefined;
 
-  private authenticated = false;
-  private initialized = false;
-  private secretStorage: vscode.SecretStorage;
+  // Expose state manager's event for backward compatibility
+  get onAuthStateChanged(): vscode.Event<boolean> {
+    // Map AuthState to boolean for backward compatibility
+    return (listener: (authenticated: boolean) => void) => {
+      return this.stateManager.onStateChanged(state => {
+        listener(state === 'authenticated');
+      });
+    };
+  }
 
   constructor(private context: vscode.ExtensionContext) {
-    this.secretStorage = context.secrets;
-
-    // Check initial auth state
-    void this.checkAuthState();
-
-    // Listen for secret changes
-    context.subscriptions.push(
-      this.secretStorage.onDidChange(e => {
-        if (e.key === TOKEN_KEY) {
-          void this.checkAuthState();
-        }
-      })
-    );
+    this.stateManager = getAuthStateManager();
   }
 
-  private async checkAuthState(): Promise<void> {
-    const token = await this.getToken();
-    const wasAuthenticated = this.authenticated;
-    this.authenticated = !!token;
-
-    // Check expiration
-    if (token) {
-      const expirationStr = await this.secretStorage.get(EXPIRATION_KEY);
-      if (expirationStr) {
-        const expiration = new Date(expirationStr);
-        if (expiration < new Date()) {
-          logger.info('Token expired, clearing auth state');
-          await this.logout();
-          return;
-        }
-      }
+  /**
+   * Initialize auth state by checking CLI keyring
+   * Call this once during extension activation
+   */
+  async initialize(): Promise<void> {
+    if (this.initPromise) {
+      return this.initPromise;
     }
 
-    // Always set context on state change OR first initialization
-    if (wasAuthenticated !== this.authenticated || !this.initialized) {
-      this.initialized = true;
-      logger.info(`Auth state: ${this.authenticated ? 'authenticated' : 'unauthenticated'}`);
-      this._onAuthStateChanged.fire(this.authenticated);
-      void vscode.commands.executeCommand('setContext', 'boundary.authenticated', this.authenticated);
+    this.initPromise = this.doInitialize();
+    return this.initPromise;
+  }
+
+  private async doInitialize(): Promise<void> {
+    logger.info('Initializing auth state...');
+
+    try {
+      const cli = getBoundaryCLI();
+      const token = await cli.getToken();
+      const hasToken = !!token;
+
+      logger.info(`Initial auth check: ${hasToken ? 'token found' : 'no token'}`);
+      this.stateManager.dispatch({ type: 'INIT_COMPLETE', hasToken });
+    } catch (error) {
+      logger.error('Auth initialization failed:', error);
+      this.stateManager.dispatch({
+        type: 'AUTH_ERROR',
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
+  /**
+   * Login with specified method and credentials
+   */
   async login(method: AuthMethod, credentials?: Credentials): Promise<AuthResult> {
     logger.info(`Attempting login with method: ${method}`);
 
@@ -76,83 +81,121 @@ export class AuthManager implements IAuthManager {
       };
     }
 
+    // Transition to authenticating state
+    this.stateManager.dispatch({ type: 'LOGIN_START' });
+
     try {
       const result = await cli.authenticate(method, credentials);
 
-      if (result.success && result.token) {
-        // Store token securely
-        await this.secretStorage.store(TOKEN_KEY, result.token);
-
-        if (result.userId) {
-          await this.secretStorage.store(USER_ID_KEY, result.userId);
-        }
-
-        if (result.expirationTime) {
-          await this.secretStorage.store(EXPIRATION_KEY, result.expirationTime.toISOString());
-        }
-
-        this.authenticated = true;
-        this._onAuthStateChanged.fire(true);
-        await vscode.commands.executeCommand('setContext', 'boundary.authenticated', true);
-
+      if (result.success) {
+        // CLI stores token in its keyring automatically
+        // We just update our state
+        this.stateManager.dispatch({ type: 'LOGIN_SUCCESS' });
         logger.info('Login successful');
       } else {
+        this.stateManager.dispatch({
+          type: 'LOGIN_FAILURE',
+          error: result.error || 'Unknown error',
+        });
         logger.warn('Login failed:', result.error);
       }
 
       return result;
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.stateManager.dispatch({ type: 'LOGIN_FAILURE', error: errorMessage });
       logger.error('Login error:', error);
+
       return {
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
       };
     }
   }
 
-  async logout(): Promise<void> {
+  /**
+   * Logout - clear CLI keyring token
+   */
+  logout(): void {
     logger.info('Logging out');
 
-    await this.secretStorage.delete(TOKEN_KEY);
-    await this.secretStorage.delete(USER_ID_KEY);
-    await this.secretStorage.delete(EXPIRATION_KEY);
-
-    this.authenticated = false;
-    this._onAuthStateChanged.fire(false);
-    await vscode.commands.executeCommand('setContext', 'boundary.authenticated', false);
+    // Note: Boundary CLI doesn't have a logout command that clears keyring
+    // The token will naturally expire. We just update our state.
+    this.stateManager.dispatch({ type: 'LOGOUT' });
   }
 
-  async getToken(): Promise<string | undefined> {
-    // First try our stored token
-    let token = await this.secretStorage.get(TOKEN_KEY);
-
-    // If no stored token, try to get from CLI keyring
-    if (!token) {
-      const cli = getBoundaryCLI();
-      token = await cli.getToken();
-
-      // If we got a token from CLI, store it
-      if (token) {
-        await this.secretStorage.store(TOKEN_KEY, token);
-        this.authenticated = true;
-        this._onAuthStateChanged.fire(true);
-        await vscode.commands.executeCommand('setContext', 'boundary.authenticated', true);
-      }
-    }
-
-    return token;
+  /**
+   * Handle token expiration (called when API returns 401/403)
+   */
+  handleTokenExpired(): void {
+    logger.info('Token expired, updating state');
+    this.stateManager.dispatch({ type: 'TOKEN_EXPIRED' });
   }
 
+  /**
+   * Get current auth state (read-only, no side effects)
+   */
+  get state() {
+    return this.stateManager.state;
+  }
+
+  /**
+   * Check if currently authenticated (read-only, no side effects)
+   */
   async isAuthenticated(): Promise<boolean> {
-    if (!this.authenticated) {
-      const token = await this.getToken();
-      this.authenticated = !!token;
+    // Ensure initialization is complete
+    await this.initialize();
+    return this.stateManager.isAuthenticated;
+  }
+
+  /**
+   * Get token from CLI keyring (read-only, no side effects)
+   * Returns undefined if not authenticated
+   */
+  async getToken(): Promise<string | undefined> {
+    if (!this.stateManager.isAuthenticated) {
+      return undefined;
     }
-    return this.authenticated;
+
+    try {
+      const cli = getBoundaryCLI();
+      return await cli.getToken();
+    } catch (error) {
+      logger.error('Failed to get token:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Verify token is still valid by checking with CLI
+   * Updates state if token is invalid
+   */
+  async verifyToken(): Promise<boolean> {
+    try {
+      const cli = getBoundaryCLI();
+      const token = await cli.getToken();
+
+      if (!token) {
+        if (this.stateManager.isAuthenticated) {
+          this.stateManager.dispatch({ type: 'TOKEN_EXPIRED' });
+        }
+        return false;
+      }
+
+      // Token exists - if we weren't authenticated, update state
+      if (!this.stateManager.isAuthenticated) {
+        this.stateManager.dispatch({ type: 'INIT_COMPLETE', hasToken: true });
+      }
+
+      return true;
+    } catch (error) {
+      logger.error('Token verification failed:', error);
+      return false;
+    }
   }
 
   dispose(): void {
-    this._onAuthStateChanged.dispose();
+    // State manager is a singleton, disposed separately
   }
 }
 

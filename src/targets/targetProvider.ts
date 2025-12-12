@@ -1,19 +1,25 @@
 /**
  * Target TreeDataProvider for the sidebar
+ *
+ * Design principles:
+ * 1. Does NOT manage auth state - delegates to AuthManager
+ * 2. Listens to auth state changes via AuthStateManager
+ * 3. Handles display/UI concerns only
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget, ITargetProvider, TargetTreeItemData } from '../types';
-import { TargetTreeItem, createErrorItem, createLoadingItem, createLoginItem, createTargetItem } from './targetItem';
+import { BoundaryTarget, IAuthManager, ITargetProvider, TargetTreeItemData } from '../types';
+import { TargetTreeItem, createErrorItem, createLoadingItem, createTargetItem } from './targetItem';
 import { getTargetService } from './targetService';
 import { logger } from '../utils/logger';
 import { isAuthRequired } from '../utils/errors';
+import { getAuthStateManager, AuthState } from '../auth/authState';
 
 export class TargetProvider implements ITargetProvider {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TargetTreeItemData | undefined | null | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private authenticated = false;
+  private authManager: IAuthManager | undefined;
   private loading = false;
   private error: string | undefined;
   private targets: BoundaryTarget[] = [];
@@ -23,24 +29,46 @@ export class TargetProvider implements ITargetProvider {
     getTargetService().onTargetsChanged(() => {
       this.refresh();
     });
+
+    // Listen for auth state changes
+    getAuthStateManager().onStateChanged((state) => {
+      this.handleAuthStateChange(state);
+    });
   }
 
-  setAuthenticated(authenticated: boolean): void {
-    if (this.authenticated !== authenticated) {
-      this.authenticated = authenticated;
-      if (authenticated) {
-        // Fetch targets when authenticated
-        void this.fetchTargets();
-      } else {
-        this.targets = [];
-        this.error = undefined;
-      }
+  /**
+   * Set the auth manager reference (called during extension activation)
+   */
+  setAuthManager(authManager: IAuthManager): void {
+    this.authManager = authManager;
+  }
+
+  /**
+   * Handle auth state changes from the state manager
+   */
+  private handleAuthStateChange(state: AuthState): void {
+    logger.debug(`TargetProvider: auth state changed to ${state}`);
+
+    if (state === 'authenticated') {
+      // Fetch targets when authenticated
+      void this.fetchTargets();
+    } else {
+      // Clear targets when not authenticated
+      this.targets = [];
+      this.error = undefined;
       this._onDidChangeTreeData.fire();
     }
   }
 
+  /**
+   * Check if currently authenticated (delegates to state manager)
+   */
+  private get isAuthenticated(): boolean {
+    return getAuthStateManager().isAuthenticated;
+  }
+
   refresh(): void {
-    if (this.authenticated) {
+    if (this.isAuthenticated) {
       void this.fetchTargets();
     } else {
       this._onDidChangeTreeData.fire();
@@ -59,20 +87,26 @@ export class TargetProvider implements ITargetProvider {
       logger.error('Failed to fetch targets:', err);
 
       if (isAuthRequired(err)) {
-        logger.info('Auth required - clearing auth state and prompting re-login');
-        this.authenticated = false;
+        logger.info('Auth required error - delegating to authManager');
+
+        // Delegate to authManager - DO NOT mutate state here
+        if (this.authManager) {
+          this.authManager.handleTokenExpired();
+        }
+
+        // Clear local display state
         this.error = undefined;
         this.targets = [];
-        await vscode.commands.executeCommand('setContext', 'boundary.authenticated', false);
 
-        // Prompt user to re-login
-        const action = await vscode.window.showWarningMessage(
+        // Prompt user to re-login (don't await - let UI refresh)
+        void vscode.window.showWarningMessage(
           'Your Boundary session has expired. Please sign in again.',
           'Sign In'
-        );
-        if (action === 'Sign In') {
-          void vscode.commands.executeCommand('boundary.login');
-        }
+        ).then(action => {
+          if (action === 'Sign In') {
+            void vscode.commands.executeCommand('boundary.login');
+          }
+        });
       } else {
         this.error = err instanceof Error ? err.message : 'Failed to fetch targets';
       }
@@ -90,7 +124,7 @@ export class TargetProvider implements ITargetProvider {
     // Root level
     if (!element) {
       // Not authenticated - return empty to show welcome view
-      if (!this.authenticated) {
+      if (!this.isAuthenticated) {
         return [];
       }
 

@@ -32,21 +32,31 @@ export function parseJsonResponse<T>(output: string): T {
 export interface BoundaryApiResponse<T = unknown> {
   status_code: number;
   status?: string;
+  context?: string;
   item?: T;
   items?: T[];
   error?: {
     kind: string;
     message: string;
   };
+  // Some API responses use api_error instead of error
+  api_error?: {
+    kind: string;
+    message: string;
+  };
 }
 
 export function isErrorResponse(response: BoundaryApiResponse): boolean {
-  return response.status_code >= 400 || response.error !== undefined;
+  return response.status_code >= 400 || response.error !== undefined || response.api_error !== undefined;
 }
 
 export function getErrorMessage(response: BoundaryApiResponse): string {
-  if (response.error?.message) {
-    return response.error.message;
+  const apiError = response.api_error || response.error;
+  if (apiError?.message) {
+    return apiError.message;
+  }
+  if (response.context) {
+    return response.context;
   }
   if (response.status) {
     return response.status;
@@ -67,7 +77,31 @@ interface AuthResponseItem {
 }
 
 export function parseAuthResponse(output: string): AuthResult {
-  const response = parseJsonResponse<BoundaryApiResponse<AuthResponseItem>>(output);
+  // OIDC auth may have non-JSON output before the JSON response
+  // Try to find JSON in the output
+  let jsonOutput = output.trim();
+
+  // Look for JSON object start
+  const jsonStart = output.indexOf('{');
+  if (jsonStart > 0) {
+    jsonOutput = output.substring(jsonStart);
+  }
+
+  // If output is empty or doesn't contain JSON, check for success indicators
+  if (!jsonOutput || !jsonOutput.startsWith('{')) {
+    // Check if OIDC auth succeeded by looking for success indicators
+    if (output.includes('Authentication information') ||
+        output.includes('token') ||
+        output.includes('successfully')) {
+      return { success: true };
+    }
+    return {
+      success: false,
+      error: 'No authentication data in response',
+    };
+  }
+
+  const response = parseJsonResponse<BoundaryApiResponse<AuthResponseItem>>(jsonOutput);
 
   if (isErrorResponse(response)) {
     return {
@@ -78,6 +112,10 @@ export function parseAuthResponse(output: string): AuthResult {
 
   const item = response.item;
   if (!item) {
+    // Response was OK but no item - might be OK for some auth methods
+    if (response.status_code === 200 || response.status_code === undefined) {
+      return { success: true };
+    }
     return {
       success: false,
       error: 'No authentication data in response',
@@ -111,11 +149,7 @@ export function parseAuthMethodsResponse(output: string): BoundaryAuthMethod[] {
   const response = parseJsonResponse<BoundaryApiResponse<AuthMethodResponseItem>>(output);
 
   if (isErrorResponse(response)) {
-    throw new BoundaryError(
-      getErrorMessage(response),
-      BoundaryErrorCode.CLI_EXECUTION_FAILED,
-      response
-    );
+    throw createErrorFromResponse(response);
   }
 
   const items = response.items || [];
@@ -162,11 +196,7 @@ export function parseScopesResponse(output: string): BoundaryScope[] {
   const response = parseJsonResponse<BoundaryApiResponse<ScopeResponseItem>>(output);
 
   if (isErrorResponse(response)) {
-    throw new BoundaryError(
-      getErrorMessage(response),
-      BoundaryErrorCode.CLI_EXECUTION_FAILED,
-      response
-    );
+    throw createErrorFromResponse(response);
   }
 
   const items = response.items || [];
@@ -209,11 +239,7 @@ export function parseTargetsResponse(output: string): BoundaryTarget[] {
   const response = parseJsonResponse<BoundaryApiResponse<TargetResponseItem>>(output);
 
   if (isErrorResponse(response)) {
-    throw new BoundaryError(
-      getErrorMessage(response),
-      BoundaryErrorCode.CLI_EXECUTION_FAILED,
-      response
-    );
+    throw createErrorFromResponse(response);
   }
 
   const items = response.items || [];
@@ -242,6 +268,26 @@ export function parseTargetsResponse(output: string): BoundaryTarget[] {
 /**
  * Parse session authorization response
  */
+interface CredentialSourceItem {
+  id: string;
+  name?: string;
+  description?: string;
+  credential_store_id?: string;
+  type?: string;
+}
+
+interface CredentialItem {
+  username?: string;
+  password?: string;
+  private_key?: string;
+  private_key_passphrase?: string;
+}
+
+interface BrokeredCredentialItem {
+  credential_source: CredentialSourceItem;
+  credential: CredentialItem;
+}
+
 interface SessionAuthResponseItem {
   session_id: string;
   target_id: string;
@@ -249,18 +295,14 @@ interface SessionAuthResponseItem {
   endpoint: string;
   endpoint_port: number;
   expiration_time: string;
-  credentials?: unknown[];
+  credentials?: BrokeredCredentialItem[];
 }
 
 export function parseSessionAuthResponse(output: string): SessionAuthorization {
   const response = parseJsonResponse<BoundaryApiResponse<SessionAuthResponseItem>>(output);
 
   if (isErrorResponse(response)) {
-    throw new BoundaryError(
-      getErrorMessage(response),
-      BoundaryErrorCode.CLI_EXECUTION_FAILED,
-      response
-    );
+    throw createErrorFromResponse(response);
   }
 
   const item = response.item;
@@ -271,13 +313,30 @@ export function parseSessionAuthResponse(output: string): SessionAuthorization {
     );
   }
 
+  // Parse brokered credentials if present
+  const credentials = item.credentials?.map(cred => ({
+    credentialSource: {
+      id: cred.credential_source.id,
+      name: cred.credential_source.name,
+      description: cred.credential_source.description,
+      credentialStoreId: cred.credential_source.credential_store_id,
+      type: cred.credential_source.type,
+    },
+    credential: {
+      username: cred.credential.username,
+      password: cred.credential.password,
+      privateKey: cred.credential.private_key,
+      privateKeyPassphrase: cred.credential.private_key_passphrase,
+    },
+  }));
+
   return {
     sessionId: item.session_id,
     authorizationToken: item.authorization_token,
     endpoint: item.endpoint,
     endpointPort: item.endpoint_port,
     expiration: new Date(item.expiration_time),
-    credentials: item.credentials,
+    credentials,
   };
 }
 
@@ -308,17 +367,73 @@ export function extractVersion(output: string): string | undefined {
 }
 
 /**
- * Check if response indicates authentication is required
+ * Check if response indicates authentication is required (401 Unauthorized)
  */
 export function isAuthRequired(response: BoundaryApiResponse): boolean {
+  const apiError = response.api_error || response.error;
   return response.status_code === 401 ||
-         response.error?.kind === 'Unauthorized';
+         apiError?.kind === 'Unauthorized' ||
+         apiError?.kind === 'Unauthenticated';
 }
 
 /**
- * Check if response indicates permission denied
+ * Check if response indicates permission denied (403 Forbidden)
  */
 export function isPermissionDenied(response: BoundaryApiResponse): boolean {
+  const apiError = response.api_error || response.error;
   return response.status_code === 403 ||
-         response.error?.kind === 'Forbidden';
+         apiError?.kind === 'Forbidden' ||
+         apiError?.kind === 'PermissionDenied';
+}
+
+/**
+ * Check if response indicates token expired
+ */
+export function isTokenExpired(response: BoundaryApiResponse): boolean {
+  const apiError = response.api_error || response.error;
+  // Token expired can be indicated by:
+  // - 401 with specific message about expiration
+  // - SessionExpired kind
+  if (apiError?.kind === 'SessionExpired' || apiError?.kind === 'TokenExpired') {
+    return true;
+  }
+  // Check message for expiration indicators (only as fallback for structured data)
+  const message = apiError?.message?.toLowerCase() || '';
+  return message.includes('expired') || message.includes('expir');
+}
+
+/**
+ * Classify API error response into BoundaryErrorCode
+ * This is the authoritative source for error classification based on API response structure
+ */
+export function classifyApiError(response: BoundaryApiResponse): BoundaryErrorCode {
+  // Check for auth-related errors first (most specific)
+  if (isTokenExpired(response)) {
+    return BoundaryErrorCode.TOKEN_EXPIRED;
+  }
+  if (isAuthRequired(response) || isPermissionDenied(response)) {
+    return BoundaryErrorCode.AUTH_FAILED;
+  }
+
+  // Other error types based on status code
+  if (response.status_code === 404) {
+    return BoundaryErrorCode.TARGET_NOT_FOUND;
+  }
+  if (response.status_code >= 500) {
+    return BoundaryErrorCode.CLI_EXECUTION_FAILED;
+  }
+
+  // Default
+  return BoundaryErrorCode.CLI_EXECUTION_FAILED;
+}
+
+/**
+ * Create a BoundaryError from an API error response
+ * This ensures consistent error creation throughout the codebase
+ */
+export function createErrorFromResponse(response: BoundaryApiResponse): BoundaryError {
+  const errorCode = classifyApiError(response);
+  const message = getErrorMessage(response);
+
+  return new BoundaryError(message, errorCode, response);
 }

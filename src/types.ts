@@ -49,9 +49,10 @@ export interface AuthResult {
 
 export interface IAuthManager extends vscode.Disposable {
   login(method: AuthMethod, credentials?: Credentials): Promise<AuthResult>;
-  logout(): Promise<void>;
+  logout(): void;
   getToken(): Promise<string | undefined>;
   isAuthenticated(): Promise<boolean>;
+  handleTokenExpired(): void;
   readonly onAuthStateChanged: vscode.Event<boolean>;
 }
 
@@ -104,6 +105,10 @@ export interface ConnectOptions {
   listenPort?: number;
   listenAddr?: string;
   authzToken?: string;
+  /** Target type for specialized connect commands (ssh vs tcp) */
+  targetType?: 'tcp' | 'ssh';
+  /** Username for SSH connections */
+  username?: string;
 }
 
 export interface SessionAuthorization {
@@ -112,7 +117,8 @@ export interface SessionAuthorization {
   endpoint: string;
   endpointPort: number;
   expiration: Date;
-  credentials?: unknown[];
+  /** Brokered credentials (if credential brokering enabled on target) */
+  credentials?: BrokeredCredential[];
 }
 
 export interface IBoundaryCLI extends vscode.Disposable {
@@ -128,6 +134,26 @@ export interface IBoundaryCLI extends vscode.Disposable {
 }
 
 // ============================================================================
+// Credential Brokering Types
+// ============================================================================
+
+export interface BrokeredCredential {
+  credentialSource: {
+    id: string;
+    name?: string;
+    description?: string;
+    credentialStoreId?: string;
+    type?: string;
+  };
+  credential: {
+    username?: string;
+    password?: string;
+    privateKey?: string;
+    privateKeyPassphrase?: string;
+  };
+}
+
+// ============================================================================
 // Connection/Session Types
 // ============================================================================
 
@@ -139,6 +165,8 @@ export interface Connection {
   localPort: number;
   process: ChildProcess;
   startTime: Date;
+  /** Brokered credentials returned by Boundary (if credential brokering enabled) */
+  credentials?: BrokeredCredential[];
 }
 
 export interface Session {
@@ -182,7 +210,7 @@ export interface TargetTreeItemData {
 
 export interface ITargetProvider extends vscode.TreeDataProvider<TargetTreeItemData> {
   refresh(): void;
-  setAuthenticated(authenticated: boolean): void;
+  setAuthManager(authManager: IAuthManager): void;
 }
 
 // ============================================================================

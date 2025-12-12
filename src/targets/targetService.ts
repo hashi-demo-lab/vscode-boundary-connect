@@ -1,5 +1,10 @@
 /**
  * Target Service for fetching and caching targets
+ *
+ * Design principles:
+ * 1. Thread-safe cache access with mutex
+ * 2. Returns copies of cached data to prevent mutation
+ * 3. Clear separation between fetch and cache operations
  */
 
 import * as vscode from 'vscode';
@@ -7,11 +12,47 @@ import { BoundaryScope, BoundaryTarget } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
 
+/**
+ * Simple mutex for preventing concurrent operations
+ */
+class Mutex {
+  private locked = false;
+  private waitQueue: Array<() => void> = [];
+
+  async acquire(): Promise<() => void> {
+    return new Promise(resolve => {
+      const tryAcquire = () => {
+        if (!this.locked) {
+          this.locked = true;
+          resolve(() => this.release());
+        } else {
+          this.waitQueue.push(tryAcquire);
+        }
+      };
+      tryAcquire();
+    });
+  }
+
+  private release(): void {
+    this.locked = false;
+    const next = this.waitQueue.shift();
+    if (next) {
+      next();
+    }
+  }
+}
+
 export class TargetService implements vscode.Disposable {
   private targetsCache: Map<string, BoundaryTarget[]> = new Map();
   private scopesCache: BoundaryScope[] = [];
   private lastFetchTime: number = 0;
   private cacheTTL = 30000; // 30 seconds
+
+  // Mutex for cache operations
+  private readonly fetchMutex = new Mutex();
+
+  // In-flight fetch promise to prevent duplicate requests
+  private fetchInProgress: Promise<BoundaryTarget[]> | undefined;
 
   private readonly _onTargetsChanged = new vscode.EventEmitter<void>();
   readonly onTargetsChanged = this._onTargetsChanged.event;
@@ -23,10 +64,16 @@ export class TargetService implements vscode.Disposable {
    */
   async getScopes(forceRefresh = false): Promise<BoundaryScope[]> {
     if (!forceRefresh && this.scopesCache.length > 0 && !this.isCacheExpired()) {
-      return this.scopesCache;
+      return [...this.scopesCache]; // Return copy
     }
 
+    const release = await this.fetchMutex.acquire();
     try {
+      // Double-check after acquiring lock
+      if (!forceRefresh && this.scopesCache.length > 0 && !this.isCacheExpired()) {
+        return [...this.scopesCache];
+      }
+
       const cli = getBoundaryCLI();
 
       // Get global scopes (orgs)
@@ -47,28 +94,59 @@ export class TargetService implements vscode.Disposable {
 
       this.scopesCache = allScopes;
       this.lastFetchTime = Date.now();
-      return allScopes;
+      return [...allScopes]; // Return copy
     } catch (error) {
       logger.error('Failed to fetch scopes:', error);
       throw error;
+    } finally {
+      release();
     }
   }
 
   /**
    * Get all targets (from all accessible scopes)
+   * Uses mutex and deduplication to prevent race conditions
    */
   async getAllTargets(forceRefresh = false): Promise<BoundaryTarget[]> {
+    // Quick path: return cached data if valid
     if (!forceRefresh && !this.isCacheExpired()) {
-      const allTargets: BoundaryTarget[] = [];
-      for (const targets of this.targetsCache.values()) {
-        allTargets.push(...targets);
-      }
-      if (allTargets.length > 0) {
-        return allTargets;
+      const cached = this.getCachedTargets();
+      if (cached.length > 0) {
+        return cached;
       }
     }
 
+    // If a fetch is already in progress, wait for it
+    if (this.fetchInProgress) {
+      logger.debug('Fetch already in progress, waiting...');
+      return this.fetchInProgress;
+    }
+
+    // Start new fetch with mutex protection
+    this.fetchInProgress = this.doFetchAllTargets();
+
     try {
+      return await this.fetchInProgress;
+    } finally {
+      this.fetchInProgress = undefined;
+    }
+  }
+
+  /**
+   * Internal fetch implementation (protected by mutex)
+   */
+  private async doFetchAllTargets(): Promise<BoundaryTarget[]> {
+    const release = await this.fetchMutex.acquire();
+    try {
+      // Double-check cache after acquiring lock
+      if (!this.isCacheExpired()) {
+        const cached = this.getCachedTargets();
+        if (cached.length > 0) {
+          return cached;
+        }
+      }
+
+      logger.debug('Fetching targets from Boundary...');
       const cli = getBoundaryCLI();
 
       // List all targets recursively from global scope
@@ -79,22 +157,46 @@ export class TargetService implements vscode.Disposable {
         t.authorizedActions.includes('authorize-session')
       );
 
-      // Update cache
-      this.targetsCache.clear();
-      for (const target of connectableTargets) {
-        const scopeTargets = this.targetsCache.get(target.scopeId) || [];
-        scopeTargets.push(target);
-        this.targetsCache.set(target.scopeId, scopeTargets);
-      }
+      // Update cache atomically
+      this.updateCache(connectableTargets);
 
-      this.lastFetchTime = Date.now();
-      this._onTargetsChanged.fire();
-
-      return connectableTargets;
+      logger.debug(`Fetched ${connectableTargets.length} connectable targets`);
+      return [...connectableTargets]; // Return copy
     } catch (error) {
       logger.error('Failed to fetch targets:', error);
       throw error;
+    } finally {
+      release();
     }
+  }
+
+  /**
+   * Get cached targets (returns copy)
+   */
+  private getCachedTargets(): BoundaryTarget[] {
+    const allTargets: BoundaryTarget[] = [];
+    for (const targets of this.targetsCache.values()) {
+      allTargets.push(...targets);
+    }
+    return allTargets;
+  }
+
+  /**
+   * Update cache atomically
+   */
+  private updateCache(targets: BoundaryTarget[]): void {
+    const newCache = new Map<string, BoundaryTarget[]>();
+
+    for (const target of targets) {
+      const scopeTargets = newCache.get(target.scopeId) || [];
+      scopeTargets.push(target);
+      newCache.set(target.scopeId, scopeTargets);
+    }
+
+    // Atomic swap
+    this.targetsCache = newCache;
+    this.lastFetchTime = Date.now();
+    this._onTargetsChanged.fire();
   }
 
   /**
@@ -104,11 +206,20 @@ export class TargetService implements vscode.Disposable {
     if (!forceRefresh && !this.isCacheExpired()) {
       const cached = this.targetsCache.get(scopeId);
       if (cached) {
-        return cached;
+        return [...cached]; // Return copy
       }
     }
 
+    const release = await this.fetchMutex.acquire();
     try {
+      // Double-check after acquiring lock
+      if (!forceRefresh && !this.isCacheExpired()) {
+        const cached = this.targetsCache.get(scopeId);
+        if (cached) {
+          return [...cached];
+        }
+      }
+
       const cli = getBoundaryCLI();
       const targets = await cli.listTargets(scopeId, false);
 
@@ -120,10 +231,12 @@ export class TargetService implements vscode.Disposable {
       this.targetsCache.set(scopeId, connectableTargets);
       this.lastFetchTime = Date.now();
 
-      return connectableTargets;
+      return [...connectableTargets]; // Return copy
     } catch (error) {
       logger.error(`Failed to fetch targets for scope ${scopeId}:`, error);
       throw error;
+    } finally {
+      release();
     }
   }
 
@@ -135,13 +248,14 @@ export class TargetService implements vscode.Disposable {
     for (const targets of this.targetsCache.values()) {
       const found = targets.find(t => t.id === targetId);
       if (found) {
-        return found;
+        return { ...found }; // Return copy
       }
     }
 
     // Fetch all and try again
     const allTargets = await this.getAllTargets(true);
-    return allTargets.find(t => t.id === targetId);
+    const found = allTargets.find(t => t.id === targetId);
+    return found ? { ...found } : undefined;
   }
 
   /**
@@ -162,7 +276,7 @@ export class TargetService implements vscode.Disposable {
   }
 
   /**
-   * Group targets by scope
+   * Group targets by scope (operates on provided data, not cache)
    */
   groupTargetsByScope(targets: BoundaryTarget[]): Map<string, BoundaryTarget[]> {
     const grouped = new Map<string, BoundaryTarget[]>();

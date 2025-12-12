@@ -54,10 +54,18 @@ function getAuthMethodDescription(method: BoundaryAuthMethod): string {
 async function showAuthMethodPicker(authMethods: BoundaryAuthMethod[]): Promise<BoundaryAuthMethod | undefined> {
   // Sort: primary first, then OIDC, then others
   const sorted = [...authMethods].sort((a, b) => {
-    if (a.isPrimary && !b.isPrimary) return -1;
-    if (!a.isPrimary && b.isPrimary) return 1;
-    if (a.type === 'oidc' && b.type !== 'oidc') return -1;
-    if (a.type !== 'oidc' && b.type === 'oidc') return 1;
+    if (a.isPrimary && !b.isPrimary) {
+      return -1;
+    }
+    if (!a.isPrimary && b.isPrimary) {
+      return 1;
+    }
+    if (a.type === 'oidc' && b.type !== 'oidc') {
+      return -1;
+    }
+    if (a.type !== 'oidc' && b.type === 'oidc') {
+      return 1;
+    }
     return a.name.localeCompare(b.name);
   });
 
@@ -268,11 +276,17 @@ export async function executeOidcAuth(
 
   const credentials: OidcCredentials = { authMethodId };
 
+  // Show a prominent message that browser is opening
+  void vscode.window.showInformationMessage(
+    'A browser window should open for sign-in. If you don\'t see it, check your taskbar.',
+    'OK'
+  );
+
   // Show progress while OIDC auth is in progress
   const result = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'Opening browser for sign-in...',
+      title: 'Waiting for browser authentication...',
       cancellable: false,
     },
     async () => {
@@ -281,7 +295,7 @@ export async function executeOidcAuth(
   );
 
   if (result.success) {
-    void vscode.window.showInformationMessage('$(check) Successfully signed in to Boundary');
+    void vscode.window.showInformationMessage('Successfully signed in to Boundary');
   } else {
     void vscode.window.showErrorMessage(`Sign-in failed: ${result.error}`);
   }
@@ -327,7 +341,7 @@ async function executeManualOidcAuth(authManager: AuthManager): Promise<AuthResu
   );
 
   if (result.success) {
-    void vscode.window.showInformationMessage('$(check) Successfully signed in to Boundary');
+    void vscode.window.showInformationMessage('Successfully signed in to Boundary');
   } else {
     void vscode.window.showErrorMessage(`Sign-in failed: ${result.error}`);
   }

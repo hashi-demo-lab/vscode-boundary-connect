@@ -3,7 +3,7 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget, IConnectionManager, Session } from '../types';
+import { BoundaryTarget, BrokeredCredential, IConnectionManager, Session } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
 import { createSession, terminateSession } from './session';
@@ -22,10 +22,28 @@ export class ConnectionManager implements IConnectionManager {
 
     const cli = getBoundaryCLI();
 
-    // For SSH targets without credential injection, prompt for username
+    // First, try to get session authorization to check for brokered credentials
+    let brokeredCredentials: BrokeredCredential[] | undefined;
     let userName: string | undefined;
-    if (target.type === 'ssh' || target.type === 'tcp') {
-      // Try to get username from user
+
+    try {
+      const authz = await cli.authorizeSession(target.id);
+      if (authz.credentials && authz.credentials.length > 0) {
+        brokeredCredentials = authz.credentials;
+        // Use username from brokered credentials if available
+        const cred = brokeredCredentials[0];
+        if (cred.credential.username) {
+          userName = cred.credential.username;
+          logger.info(`Using brokered username: ${userName}`);
+        }
+      }
+    } catch (error) {
+      // authorize-session is optional - continue without it
+      logger.debug('Could not get session authorization for credentials:', error);
+    }
+
+    // For SSH/TCP targets without brokered credentials, prompt for username
+    if (!userName && (target.type === 'ssh' || target.type === 'tcp')) {
       userName = await this.promptForUsername(target);
       if (userName === undefined) {
         // User cancelled
@@ -33,7 +51,7 @@ export class ConnectionManager implements IConnectionManager {
       }
     }
 
-    // Spawn boundary connect
+    // Spawn boundary connect (TCP proxy mode)
     const connection = await cli.connect(target.id);
 
     // Create session
@@ -60,6 +78,7 @@ export class ConnectionManager implements IConnectionManager {
           host: session.localHost,
           port: session.localPort,
           userName: userName || undefined,
+          targetName: target.name,
         });
       } catch (error) {
         logger.error('Failed to trigger Remote SSH:', error);

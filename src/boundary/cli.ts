@@ -248,6 +248,9 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async connect(targetId: string, options: ConnectOptions = {}): Promise<Connection> {
+    // Always use 'boundary connect' (TCP proxy mode) for all target types
+    // This creates a persistent local proxy that VS Code Remote SSH can connect to
+    // The 'boundary connect ssh' subcommand auto-launches SSH which we don't want
     const args = ['connect', '-target-id', targetId];
 
     if (options.listenPort !== undefined) {

@@ -3,11 +3,18 @@
  *
  * Integrates HashiCorp Boundary with VS Code Remote SSH for seamless
  * secure access to infrastructure.
+ *
+ * Architecture:
+ * - AuthStateManager: Single source of truth for auth state
+ * - AuthManager: Orchestrates auth operations
+ * - TargetProvider: UI component that listens to auth state
+ * - CLI: Boundary CLI wrapper (keyring is source of truth for tokens)
  */
 
 import * as vscode from 'vscode';
 import { BoundaryTarget } from './types';
 import { AuthManager, createAuthManager } from './auth/authManager';
+import { disposeAuthStateManager } from './auth/authState';
 import { executePasswordAuth } from './auth/passwordAuth';
 import { executeOidcAuth } from './auth/oidcAuth';
 import { getBoundaryCLI, disposeBoundaryCLI } from './boundary/cli';
@@ -72,12 +79,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.debug('Boundary CLI is installed and available');
   }
 
-  // Initialize auth manager
+  // Initialize auth manager (uses AuthStateManager internally)
   authManager = createAuthManager(context);
   context.subscriptions.push(authManager);
 
   // Initialize target provider
   targetProvider = createTargetProvider();
+  targetProvider.setAuthManager(authManager); // Wire up for token expiration handling
   context.subscriptions.push(targetProvider);
 
   // Register TreeView
@@ -102,16 +110,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerFileDecorationProvider(decorationProvider)
   );
 
-  // Wire up auth state changes to target provider
-  context.subscriptions.push(
-    authManager.onAuthStateChanged(async authenticated => {
-      logger.debug('Auth state changed:', authenticated);
-      await vscode.commands.executeCommand('setContext', 'boundary.authenticated', authenticated);
-      logger.debug('Context boundary.authenticated updated to:', authenticated);
-      targetProvider.setAuthenticated(authenticated);
-    })
-  );
-
   // Wire up connection manager to status bar
   const connectionManager = getConnectionManager();
   const statusBar = getStatusBarManager();
@@ -127,18 +125,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerCommands(context);
   logger.debug('Commands registered successfully');
 
-  // Check initial auth state
-  const isAuthenticated = await authManager.isAuthenticated();
-  logger.debug('Initial auth state:', isAuthenticated);
-
-  // Set context for views
-  await vscode.commands.executeCommand('setContext', 'boundary.authenticated', isAuthenticated);
-  logger.debug('Context boundary.authenticated set to:', isAuthenticated);
-
-  targetProvider.setAuthenticated(isAuthenticated);
+  // Initialize auth state (checks CLI keyring for existing token)
+  await authManager.initialize();
+  logger.debug('Auth initialization complete, state:', authManager.state);
 
   logger.info('Boundary extension activated');
-  logger.show(); // Automatically show output channel in debug mode
 }
 
 /**
@@ -149,9 +140,12 @@ function registerCommands(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('boundary.login', async () => {
       logger.info('boundary.login command invoked');
-      // Use OIDC auth with auto-discovery - it will find available methods
-      // and handle fallbacks automatically
-      await executeOidcAuth(authManager);
+      const result = await executeOidcAuth(authManager);
+
+      // Refresh targets after successful login
+      if (result.success) {
+        targetProvider.refresh();
+      }
     })
   );
 
@@ -166,18 +160,24 @@ function registerCommands(context: vscode.ExtensionContext): void {
       }
 
       logger.debug('Auth method selected:', method);
+      let result;
       if (method === 'oidc') {
-        await executeOidcAuth(authManager);
+        result = await executeOidcAuth(authManager);
       } else {
-        await executePasswordAuth(authManager);
+        result = await executePasswordAuth(authManager);
+      }
+
+      // Refresh targets after successful login
+      if (result?.success) {
+        targetProvider.refresh();
       }
     })
   );
 
   // Logout command
   context.subscriptions.push(
-    vscode.commands.registerCommand('boundary.logout', async () => {
-      await authManager.logout();
+    vscode.commands.registerCommand('boundary.logout', () => {
+      authManager.logout();
       void vscode.window.showInformationMessage('Logged out of Boundary');
     })
   );
@@ -314,13 +314,14 @@ async function connectToTarget(target: BoundaryTarget): Promise<void> {
 export function deactivate(): void {
   logger.info('Deactivating Boundary extension');
 
-  // Dispose all singletons
+  // Dispose all singletons in reverse order of creation
   disposeConnectionManager();
   disposeStatusBarManager();
   disposeSessionsPanelProvider();
   disposeTargetDecorationProvider();
   disposeTargetService();
   disposeBoundaryCLI();
+  disposeAuthStateManager();
   disposeConfigurationService();
 
   Logger.getInstance().dispose();

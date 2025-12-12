@@ -3,6 +3,11 @@
  */
 
 describe('TargetProvider', () => {
+  // Reset modules before each test to ensure clean state
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
   describe('module exports', () => {
     it('should export TargetProvider class', () => {
       const { TargetProvider } = require('../../../src/targets/targetProvider');

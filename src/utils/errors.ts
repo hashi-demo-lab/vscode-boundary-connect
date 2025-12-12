@@ -130,23 +130,55 @@ export function isErrorCode(error: unknown, code: BoundaryErrorCode): boolean {
 
 /**
  * Check if error indicates authentication is required
+ *
+ * Priority order:
+ * 1. BoundaryErrorCode (most reliable - set during parsing)
+ * 2. Structured API response data in error.details
+ * 3. String patterns in error message (fallback only)
  */
 export function isAuthRequired(error: unknown): boolean {
+  // 1. Check error code first (set during parsing with classifyApiError)
   if (isErrorCode(error, BoundaryErrorCode.AUTH_FAILED) ||
       isErrorCode(error, BoundaryErrorCode.TOKEN_EXPIRED)) {
     return true;
   }
 
-  // Also check for 401/403 status codes in the error message
+  // 2. Check BoundaryError details for API response structure
+  if (error instanceof BoundaryError && error.details) {
+    const details = error.details as {
+      status_code?: number;
+      api_error?: { kind?: string };
+      error?: { kind?: string };
+    };
+
+    // Check status code
+    if (details.status_code === 401 || details.status_code === 403) {
+      return true;
+    }
+
+    // Check api_error/error kind (structured data)
+    const apiError = details.api_error || details.error;
+    const kind = apiError?.kind;
+    if (kind === 'PermissionDenied' ||
+        kind === 'Unauthorized' ||
+        kind === 'Unauthenticated' ||
+        kind === 'Forbidden' ||
+        kind === 'SessionExpired' ||
+        kind === 'TokenExpired') {
+      return true;
+    }
+  }
+
+  // 3. Fallback: String patterns (least reliable, but catches edge cases)
+  // Only check for specific patterns that strongly indicate auth issues
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
-    if (message.includes('401') ||
-        message.includes('403') ||
-        message.includes('unauthenticated') ||
+    // Only check for clear auth-related patterns, avoid false positives
+    if (message.includes('unauthenticated') ||
         message.includes('unauthorized') ||
-        message.includes('forbidden') ||
         message.includes('permission denied') ||
-        message.includes('permissiondenied')) {
+        message.includes('session expired') ||
+        message.includes('token expired')) {
       return true;
     }
   }

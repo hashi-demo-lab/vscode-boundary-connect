@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import { Session } from '../types';
 import { getConnectionManager } from '../connection/connectionManager';
+import { logger } from '../utils/logger';
 
 interface WebviewMessage {
   command: 'disconnect' | 'disconnectAll' | 'copyPort';
@@ -43,13 +44,23 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     // Handle messages from webview
     webviewView.webview.onDidReceiveMessage(
       async (message: WebviewMessage) => {
+        logger.info(`Sessions panel received message: ${JSON.stringify(message)}`);
         switch (message.command) {
           case 'disconnect':
             if (message.sessionId) {
-              await connectionManager.disconnect(message.sessionId);
+              logger.info(`Disconnecting session: ${message.sessionId}`);
+              try {
+                await connectionManager.disconnect(message.sessionId);
+                logger.info(`Session ${message.sessionId} disconnected successfully`);
+              } catch (err) {
+                logger.error(`Failed to disconnect session ${message.sessionId}:`, err);
+              }
+            } else {
+              logger.warn('Disconnect message received but no sessionId provided');
             }
             break;
           case 'disconnectAll':
+            logger.info('Disconnecting all sessions');
             await connectionManager.disconnectAll();
             break;
           case 'copyPort':
@@ -132,7 +143,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
       align-items: center;
       justify-content: space-between;
       padding: 10px 14px;
-      background: linear-gradient(135deg, var(--boundary-primary) 0%, var(--boundary-accent) 100%);
+      background: linear-gradient(135deg, #9333EA 0%, #EC4899 50%, #F472B6 100%);
       border-radius: var(--radius-md);
       margin-bottom: 16px;
       color: white;
@@ -406,19 +417,73 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
   ${sessions.length > 0 ? this._renderSessions(sessions) : this._renderEmptyState()}
 
   <script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
+    (function() {
+      const vscode = acquireVsCodeApi();
 
-    function disconnect(sessionId) {
-      vscode.postMessage({ command: 'disconnect', sessionId });
-    }
+      // Expose functions globally for onclick handlers
+      window.disconnect = function(sessionId) {
+        console.log('[Boundary] Disconnect clicked for session:', sessionId);
+        try {
+          vscode.postMessage({ command: 'disconnect', sessionId: sessionId });
+          console.log('[Boundary] Message posted successfully');
+        } catch (err) {
+          console.error('[Boundary] Failed to post message:', err);
+        }
+      };
 
-    function disconnectAll() {
-      vscode.postMessage({ command: 'disconnectAll' });
-    }
+      window.disconnectAll = function() {
+        console.log('[Boundary] Disconnect all clicked');
+        try {
+          vscode.postMessage({ command: 'disconnectAll' });
+          console.log('[Boundary] Message posted successfully');
+        } catch (err) {
+          console.error('[Boundary] Failed to post message:', err);
+        }
+      };
 
-    function copyPort(port) {
-      vscode.postMessage({ command: 'copyPort', port });
-    }
+      window.copyPort = function(port) {
+        console.log('[Boundary] Copy port clicked:', port);
+        try {
+          vscode.postMessage({ command: 'copyPort', port: port });
+          console.log('[Boundary] Message posted successfully');
+        } catch (err) {
+          console.error('[Boundary] Failed to post message:', err);
+        }
+      };
+
+      // Also attach event listeners as backup (delegated to body)
+      document.body.addEventListener('click', function(event) {
+        const target = event.target;
+        const button = target.closest('.btn-disconnect');
+        if (button) {
+          const card = button.closest('.session-card');
+          if (card) {
+            const sessionId = card.dataset.sessionId;
+            console.log('[Boundary] Disconnect via event listener for session:', sessionId);
+            if (sessionId) {
+              window.disconnect(sessionId);
+            }
+          }
+        }
+
+        const disconnectAllBtn = target.closest('.btn-danger-outline');
+        if (disconnectAllBtn) {
+          console.log('[Boundary] Disconnect all via event listener');
+          window.disconnectAll();
+        }
+
+        const portEl = target.closest('.detail-value.port');
+        if (portEl) {
+          const port = portEl.textContent.replace(':', '').trim();
+          console.log('[Boundary] Copy port via event listener:', port);
+          if (port) {
+            window.copyPort(port);
+          }
+        }
+      });
+
+      console.log('[Boundary] Sessions panel script initialized');
+    })();
   </script>
 </body>
 </html>`;
