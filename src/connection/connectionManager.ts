@@ -7,7 +7,7 @@ import { BoundaryTarget, BrokeredCredential, IConnectionManager, Session } from 
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
 import { createSession, terminateSession } from './session';
-import { triggerRemoteSSH } from './remoteSSH';
+import { triggerRemoteSSH, removeBoundarySSHConfigEntry } from './remoteSSH';
 
 /** Storage key prefix for persisted usernames */
 const USERNAME_STORAGE_PREFIX = 'boundary.username.';
@@ -78,6 +78,9 @@ export class ConnectionManager implements IConnectionManager {
       session.status = 'terminated';
       this.sessions.delete(session.id);
       this._onSessionsChanged.fire(this.getActiveSessions());
+
+      // Clean up SSH config entry for this session
+      void removeBoundarySSHConfigEntry(session.localPort, session.targetName);
     });
 
     // Notify listeners

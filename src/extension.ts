@@ -21,6 +21,7 @@ import { BoundaryCLI, getBoundaryCLI, disposeBoundaryCLI } from './boundary/cli'
 import { createTargetProvider, TargetProvider } from './targets/targetProvider';
 import { disposeTargetService } from './targets/targetService';
 import { getConnectionManager, disposeConnectionManager } from './connection/connectionManager';
+import { cleanupBoundarySSHConfigEntries } from './connection/remoteSSH';
 import { getStatusBarManager, disposeStatusBarManager } from './ui/statusBar';
 import { showAuthMethodPicker, showTargetPicker, showSessionsList } from './ui/quickPick';
 import { createSessionsPanelProvider, disposeSessionsPanelProvider } from './ui/sessionsPanel';
@@ -333,6 +334,9 @@ async function connectToTarget(target: BoundaryTarget): Promise<void> {
  */
 export function deactivate(): void {
   logger.info('Deactivating Boundary extension');
+
+  // Clean up any remaining SSH config entries (fire and forget)
+  void cleanupBoundarySSHConfigEntries();
 
   // Dispose all singletons in reverse order of creation
   disposeConnectionManager();

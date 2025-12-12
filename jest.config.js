@@ -9,6 +9,10 @@ module.exports = {
       tsconfig: '<rootDir>/tsconfig.test.json'
     }]
   },
+  // Transform zod ESM module
+  transformIgnorePatterns: [
+    'node_modules/(?!(zod)/)'
+  ],
   moduleNameMapper: {
     '^vscode$': '<rootDir>/tests/mocks/vscode.ts'
   },

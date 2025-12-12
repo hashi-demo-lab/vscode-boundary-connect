@@ -98,8 +98,18 @@
     "viewsWelcome": [
       {
         "view": "boundary.targets",
-        "contents": "Connect securely to your infrastructure through HashiCorp Boundary.\n\nAuthenticate to view available targets.\n[Sign In to Boundary](command:boundary.login)\n\nLearn more about [Boundary](https://www.boundaryproject.io).",
-        "when": "!boundary.authenticated"
+        "contents": "Boundary CLI is required to connect to your infrastructure.\n\n[$(cloud-download) Download Boundary CLI](https://developer.hashicorp.com/boundary/downloads)\n\nAfter installing, click refresh.\n[$(refresh) Refresh](command:boundary.refresh)",
+        "when": "!boundary.cliInstalled"
+      },
+      {
+        "view": "boundary.targets",
+        "contents": "Configure your Boundary controller address to get started.\n\n[$(gear) Configure Boundary Address](command:workbench.action.openSettings?%22boundary.addr%22)\n\nOr set the `BOUNDARY_ADDR` environment variable.",
+        "when": "boundary.cliInstalled && !boundary.addrConfigured"
+      },
+      {
+        "view": "boundary.targets",
+        "contents": "Connect securely to your infrastructure through HashiCorp Boundary.\n\nAuthenticate to view available targets.\n[$(sign-in) Sign In to Boundary](command:boundary.login)\n\nLearn more about [Boundary](https://www.boundaryproject.io).",
+        "when": "boundary.cliInstalled && boundary.addrConfigured && !boundary.authenticated"
       }
     ],
     "menus": {
@@ -125,6 +135,11 @@
           "command": "boundary.connectTarget",
           "when": "view == boundary.targets && viewItem == target",
           "group": "inline"
+        },
+        {
+          "command": "boundary.connectTarget",
+          "when": "view == boundary.targets && viewItem == target",
+          "group": "navigation"
         }
       ]
     },
@@ -148,13 +163,19 @@
         },
         "boundary.keyringType": {
           "type": "string",
-          "enum": ["auto", "none"],
+          "enum": [
+            "auto",
+            "none"
+          ],
           "default": "auto",
           "description": "Keyring type for token storage. Use 'none' in containers."
         },
         "boundary.defaultAuthMethod": {
           "type": "string",
-          "enum": ["oidc", "password"],
+          "enum": [
+            "oidc",
+            "password"
+          ],
           "default": "oidc",
           "description": "Default authentication method"
         },
@@ -165,7 +186,12 @@
         },
         "boundary.logLevel": {
           "type": "string",
-          "enum": ["debug", "info", "warn", "error"],
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
           "default": "info",
           "description": "Log level for extension output"
         }
@@ -216,5 +242,8 @@
     "jest": "^29.7.0",
     "ts-jest": "^29.1.2",
     "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "zod": "^4.1.13"
   }
 }

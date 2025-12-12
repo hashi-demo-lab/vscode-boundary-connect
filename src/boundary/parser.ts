@@ -1,9 +1,169 @@
 /**
  * Boundary CLI output parser utilities
+ *
+ * Uses Zod for runtime validation of CLI responses to catch
+ * malformed or unexpected output early.
  */
 
+import { z } from 'zod';
 import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
 import { AuthResult, BoundaryAuthMethod, BoundaryScope, BoundaryTarget, SessionAuthorization } from '../types';
+import { logger } from '../utils/logger';
+
+// ============================================================================
+// Zod Schemas for Runtime Validation
+// ============================================================================
+
+/**
+ * API error schema (appears in both 'error' and 'api_error' fields)
+ */
+const ApiErrorSchema = z.object({
+  kind: z.string(),
+  message: z.string(),
+}).optional();
+
+/**
+ * Base API response schema - all Boundary CLI responses follow this pattern
+ */
+const BaseApiResponseSchema = z.object({
+  status_code: z.number().optional(),
+  status: z.string().optional(),
+  context: z.string().optional(),
+  error: ApiErrorSchema,
+  api_error: ApiErrorSchema,
+});
+
+/**
+ * Auth method response schema
+ */
+const AuthMethodItemSchema = z.object({
+  id: z.string(),
+  scope_id: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  type: z.enum(['oidc', 'password', 'ldap']),
+  is_primary: z.boolean().optional().default(false),
+  created_time: z.string().optional(),
+  updated_time: z.string().optional(),
+});
+
+const AuthMethodsResponseSchema = BaseApiResponseSchema.extend({
+  items: z.array(AuthMethodItemSchema).optional().default([]),
+});
+
+/**
+ * Scope response schema
+ */
+const ScopeItemSchema = z.object({
+  id: z.string(),
+  scope_id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  type: z.enum(['global', 'org', 'project']),
+});
+
+const ScopesResponseSchema = BaseApiResponseSchema.extend({
+  items: z.array(ScopeItemSchema).optional().default([]),
+});
+
+/**
+ * Target response schema
+ */
+const TargetScopeSchema = z.object({
+  id: z.string(),
+  type: z.enum(['global', 'org', 'project']),
+  name: z.string(),
+  description: z.string().optional(),
+  parent_scope_id: z.string().optional(),
+});
+
+const TargetItemSchema = z.object({
+  id: z.string(),
+  scope_id: z.string(),
+  scope: TargetScopeSchema,
+  name: z.string(),
+  description: z.string().optional(),
+  type: z.enum(['tcp', 'ssh', 'rdp']),
+  attributes: z.object({
+    default_port: z.number().optional(),
+  }).optional(),
+  session_max_seconds: z.number().optional(),
+  session_connection_limit: z.number().optional(),
+  authorized_actions: z.array(z.string()).optional().default([]),
+  created_time: z.string().optional(),
+  updated_time: z.string().optional(),
+});
+
+const TargetsResponseSchema = BaseApiResponseSchema.extend({
+  items: z.array(TargetItemSchema).optional().default([]),
+});
+
+/**
+ * Session authorization response schema
+ */
+const CredentialSourceSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  credential_store_id: z.string().optional(),
+  type: z.string().optional(),
+});
+
+const CredentialSchema = z.object({
+  username: z.string().optional(),
+  password: z.string().optional(),
+  private_key: z.string().optional(),
+  private_key_passphrase: z.string().optional(),
+});
+
+const BrokeredCredentialSchema = z.object({
+  credential_source: CredentialSourceSchema,
+  credential: CredentialSchema,
+});
+
+const SessionAuthItemSchema = z.object({
+  session_id: z.string(),
+  target_id: z.string().optional(),
+  authorization_token: z.string(),
+  endpoint: z.string(),
+  endpoint_port: z.number(),
+  expiration_time: z.string(),
+  credentials: z.array(BrokeredCredentialSchema).optional(),
+});
+
+const SessionAuthResponseSchema = BaseApiResponseSchema.extend({
+  item: SessionAuthItemSchema.optional(),
+});
+
+/**
+ * Safely parse JSON with validation using a Zod schema
+ */
+function safeParseJson<T extends z.ZodTypeAny>(
+  output: string,
+  schema: T,
+  context: string
+): z.infer<T> {
+  let json: unknown;
+  try {
+    json = JSON.parse(output);
+  } catch (error) {
+    throw new BoundaryError(
+      `Failed to parse JSON response: ${error instanceof Error ? error.message : String(error)}`,
+      BoundaryErrorCode.PARSE_ERROR,
+      { output: output.substring(0, 500) } // Truncate for logging
+    );
+  }
+
+  const result = schema.safeParse(json);
+  if (!result.success) {
+    logger.warn(`Zod validation failed for ${context}:`, result.error.format());
+    // Log but don't fail - fall back to loose parsing for backwards compatibility
+    // This allows the extension to work with newer CLI versions that add fields
+    return json as z.infer<T>;
+  }
+
+  return result.data;
+}
 
 // Regex patterns for parsing CLI output
 // Matches both old format: "Proxy listening on 127.0.0.1:PORT"
@@ -30,7 +190,7 @@ export function parseJsonResponse<T>(output: string): T {
  * Check if response indicates an error
  */
 export interface BoundaryApiResponse<T = unknown> {
-  status_code: number;
+  status_code?: number;
   status?: string;
   context?: string;
   item?: T;
@@ -47,7 +207,8 @@ export interface BoundaryApiResponse<T = unknown> {
 }
 
 export function isErrorResponse(response: BoundaryApiResponse): boolean {
-  return response.status_code >= 400 || response.error !== undefined || response.api_error !== undefined;
+  const statusCode = response.status_code ?? 200;
+  return statusCode >= 400 || response.error !== undefined || response.api_error !== undefined;
 }
 
 export function getErrorMessage(response: BoundaryApiResponse): string {
@@ -61,7 +222,7 @@ export function getErrorMessage(response: BoundaryApiResponse): string {
   if (response.status) {
     return response.status;
   }
-  return `Request failed with status ${response.status_code}`;
+  return `Request failed with status ${response.status_code ?? 'unknown'}`;
 }
 
 /**
@@ -146,7 +307,7 @@ interface AuthMethodResponseItem {
 }
 
 export function parseAuthMethodsResponse(output: string): BoundaryAuthMethod[] {
-  const response = parseJsonResponse<BoundaryApiResponse<AuthMethodResponseItem>>(output);
+  const response = safeParseJson(output, AuthMethodsResponseSchema, 'authMethods');
 
   if (isErrorResponse(response)) {
     throw createErrorFromResponse(response);
@@ -193,7 +354,7 @@ interface ScopeResponseItem {
 }
 
 export function parseScopesResponse(output: string): BoundaryScope[] {
-  const response = parseJsonResponse<BoundaryApiResponse<ScopeResponseItem>>(output);
+  const response = safeParseJson(output, ScopesResponseSchema, 'scopes');
 
   if (isErrorResponse(response)) {
     throw createErrorFromResponse(response);
@@ -236,7 +397,7 @@ interface TargetResponseItem {
 }
 
 export function parseTargetsResponse(output: string): BoundaryTarget[] {
-  const response = parseJsonResponse<BoundaryApiResponse<TargetResponseItem>>(output);
+  const response = safeParseJson(output, TargetsResponseSchema, 'targets');
 
   if (isErrorResponse(response)) {
     throw createErrorFromResponse(response);
@@ -299,7 +460,7 @@ interface SessionAuthResponseItem {
 }
 
 export function parseSessionAuthResponse(output: string): SessionAuthorization {
-  const response = parseJsonResponse<BoundaryApiResponse<SessionAuthResponseItem>>(output);
+  const response = safeParseJson(output, SessionAuthResponseSchema, 'sessionAuth');
 
   if (isErrorResponse(response)) {
     throw createErrorFromResponse(response);
@@ -416,10 +577,11 @@ export function classifyApiError(response: BoundaryApiResponse): BoundaryErrorCo
   }
 
   // Other error types based on status code
-  if (response.status_code === 404) {
+  const statusCode = response.status_code ?? 200;
+  if (statusCode === 404) {
     return BoundaryErrorCode.TARGET_NOT_FOUND;
   }
-  if (response.status_code >= 500) {
+  if (statusCode >= 500) {
     return BoundaryErrorCode.CLI_EXECUTION_FAILED;
   }
 

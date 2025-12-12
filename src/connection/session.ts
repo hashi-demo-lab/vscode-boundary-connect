@@ -80,45 +80,62 @@ export function getSessionDescription(session: Session): string {
   return `Port ${session.localPort} - ${duration}`;
 }
 
+/** Default timeout for graceful termination before force kill */
+const FORCE_KILL_TIMEOUT_MS = 5000;
+
 /**
- * Terminate a session gracefully
+ * Terminate a session gracefully with proper cleanup
+ *
+ * Uses a cleaner pattern that ensures timeout cleanup regardless
+ * of how the process exits.
  */
 export async function terminateSession(session: Session): Promise<void> {
   logger.info(`Terminating session ${session.id} for target ${session.targetName}`);
 
   session.status = 'disconnecting';
+  const proc = session.process;
+
+  // Already terminated
+  if (proc.killed) {
+    session.status = 'terminated';
+    return;
+  }
 
   return new Promise((resolve) => {
-    const process = session.process;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    let resolved = false;
 
-    // Set up exit handler
-    const onExit = () => {
+    const cleanup = () => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+
+      // Clear the force kill timeout
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+        forceKillTimeout = undefined;
+      }
+
       session.status = 'terminated';
       resolve();
     };
 
-    if (process.killed) {
-      session.status = 'terminated';
-      resolve();
-      return;
-    }
+    // Listen for process exit
+    proc.once('exit', cleanup);
 
-    process.once('exit', onExit);
+    // Send SIGTERM for graceful shutdown
+    proc.kill('SIGTERM');
 
-    // Send SIGTERM
-    process.kill('SIGTERM');
-
-    // Force kill after timeout
-    const forceKillTimeout = setTimeout(() => {
-      if (!process.killed) {
-        logger.warn(`Force killing session ${session.id}`);
-        process.kill('SIGKILL');
+    // Schedule force kill if process doesn't exit gracefully
+    forceKillTimeout = setTimeout(() => {
+      if (!proc.killed && !resolved) {
+        logger.warn(`Force killing session ${session.id} after ${FORCE_KILL_TIMEOUT_MS}ms timeout`);
+        proc.kill('SIGKILL');
       }
-    }, 5000);
+    }, FORCE_KILL_TIMEOUT_MS);
 
-    // Clean up timeout on exit
-    process.once('exit', () => {
-      clearTimeout(forceKillTimeout);
-    });
+    // Ensure timeout doesn't keep Node process alive
+    forceKillTimeout.unref?.();
   });
 }
