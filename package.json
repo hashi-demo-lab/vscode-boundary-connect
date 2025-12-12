@@ -1,0 +1,220 @@
+{
+  "name": "boundary-vscode",
+  "displayName": "Boundary",
+  "description": "HashiCorp Boundary integration for VS Code Remote SSH",
+  "version": "0.1.0",
+  "publisher": "hashicorp",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hashi-demo-lab/vscode-boundary-connect.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hashi-demo-lab/vscode-boundary-connect/issues"
+  },
+  "homepage": "https://github.com/hashi-demo-lab/vscode-boundary-connect#readme",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "boundary",
+    "hashicorp",
+    "ssh",
+    "remote",
+    "security",
+    "infrastructure"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "boundary.login",
+        "title": "Boundary: Login",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "boundary.logout",
+        "title": "Boundary: Logout",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "boundary.connect",
+        "title": "Boundary: Connect to Target",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "boundary.connectTarget",
+        "title": "Connect",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "boundary.disconnect",
+        "title": "Boundary: Disconnect",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "boundary.disconnectAll",
+        "title": "Boundary: Disconnect All"
+      },
+      {
+        "command": "boundary.refresh",
+        "title": "Boundary: Refresh Targets",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "boundary.showSessions",
+        "title": "Boundary: Show Sessions",
+        "icon": "$(list-unordered)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "boundary",
+          "title": "Boundary",
+          "icon": "resources/icons/boundary.svg"
+        }
+      ]
+    },
+    "views": {
+      "boundary": [
+        {
+          "id": "boundary.targets",
+          "name": "Targets",
+          "contextualTitle": "Boundary Targets"
+        },
+        {
+          "id": "boundary.sessionsPanel",
+          "type": "webview",
+          "name": "Sessions",
+          "contextualTitle": "Active Sessions",
+          "when": "boundary.authenticated"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "boundary.targets",
+        "contents": "Connect securely to your infrastructure through HashiCorp Boundary.\n\nAuthenticate to view available targets.\n[Sign In to Boundary](command:boundary.login)\n\nLearn more about [Boundary](https://www.boundaryproject.io).",
+        "when": "!boundary.authenticated"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "boundary.refresh",
+          "when": "view == boundary.targets",
+          "group": "navigation"
+        },
+        {
+          "command": "boundary.login",
+          "when": "view == boundary.targets && !boundary.authenticated",
+          "group": "navigation"
+        },
+        {
+          "command": "boundary.logout",
+          "when": "view == boundary.targets && boundary.authenticated",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "boundary.connectTarget",
+          "when": "view == boundary.targets && viewItem == target",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Boundary",
+      "properties": {
+        "boundary.cliPath": {
+          "type": "string",
+          "default": "boundary",
+          "description": "Path to Boundary CLI executable"
+        },
+        "boundary.addr": {
+          "type": "string",
+          "default": "",
+          "description": "Boundary controller address (e.g., https://boundary.local). If empty, uses BOUNDARY_ADDR env var."
+        },
+        "boundary.tlsInsecure": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip TLS certificate verification (for development/testing only)"
+        },
+        "boundary.keyringType": {
+          "type": "string",
+          "enum": ["auto", "none"],
+          "default": "auto",
+          "description": "Keyring type for token storage. Use 'none' in containers."
+        },
+        "boundary.defaultAuthMethod": {
+          "type": "string",
+          "enum": ["oidc", "password"],
+          "default": "oidc",
+          "description": "Default authentication method"
+        },
+        "boundary.autoConnect": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically connect to last used target on startup"
+        },
+        "boundary.logLevel": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error"],
+          "default": "info",
+          "description": "Log level for extension output"
+        }
+      }
+    },
+    "colors": [
+      {
+        "id": "boundary.connectedBadge",
+        "description": "Badge color for connected targets",
+        "defaults": {
+          "dark": "#10B981",
+          "light": "#059669",
+          "highContrast": "#34D399"
+        }
+      },
+      {
+        "id": "boundary.sessionActive",
+        "description": "Color for active session indicators",
+        "defaults": {
+          "dark": "#7C3AED",
+          "light": "#6D28D9",
+          "highContrast": "#A78BFA"
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "jest",
+    "test:unit": "jest --testPathPattern=tests/unit",
+    "test:integration": "node ./out/test/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.74.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "@vscode/test-electron": "^2.3.8",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.19.11",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.3.3"
+  }
+}

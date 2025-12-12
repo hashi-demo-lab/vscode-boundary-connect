@@ -1,0 +1,36 @@
+# Source files (bundled into out/)
+src/**
+tests/**
+
+# Development files
+.git/**
+.github/**
+.claude/**
+.copilot/**
+.devcontainer/**
+.specify/**
+.hashicorp/**
+node_modules/**
+specs/**
+
+# Build files
+*.map
+tsconfig*.json
+jest.config.js
+esbuild.js
+.eslintrc*
+.prettierrc*
+
+# Downloaded binaries
+boundary
+boundary-wrapper.sh
+LICENSE.txt
+
+# Other
+*.vsix
+.gitignore
+.mcp.json
+.pre-commit-config.yaml
+.tflint.hcl
+AGENTS.md
+*.md

@@ -58,7 +58,14 @@
       "Bash(.specify/scripts/bash/validate-env.sh:*)",
       "WebFetch(domain:github.com)",
       "Bash(npx ccstatusline@latest:*)",
-      "Bash(npm run health:*)"
+      "Bash(npm run health:*)",
+      "Bash(./boundary version:*)",
+      "Bash(/opt/homebrew/bin/boundary version:*)",
+      "Bash(boundary version:*)",
+      "Bash(boundary --help)",
+      "Bash(npm run compile:*)",
+      "Bash(npm run package:*)",
+      "Bash(code --install-extension:*)"
     ],
     "deny": [
       "Write(.gitignore)",

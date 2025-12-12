@@ -46,3 +46,7 @@ configstore/
 sandbox.auto.tfvars
 sandbox.backend.tf
 
+
+# Node.js
+node_modules/
+out/
