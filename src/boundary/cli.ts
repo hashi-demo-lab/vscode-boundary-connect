@@ -48,6 +48,7 @@ export class BoundaryCLI implements IBoundaryCLI {
   private activeProcesses: Map<string, ChildProcess> = new Map();
   private resolvedCliPath: string | undefined;
   private cliPathResolved = false;
+  private cliPathResolutionFailed = false;
 
   private get cliPath(): string {
     const configuredPath = getConfigurationService().get('cliPath');
@@ -80,11 +81,20 @@ export class BoundaryCLI implements IBoundaryCLI {
   /**
    * Ensure CLI path is resolved before use
    * Always tries to verify the path works, falls back to auto-discovery
+   *
+   * IMPORTANT: Only marks as resolved if we actually found a working CLI path.
+   * This allows retry on subsequent calls if the first attempt failed (e.g.,
+   * if PATH wasn't fully loaded during extension activation).
    */
   private async ensureCliPath(): Promise<void> {
-    if (this.cliPathResolved) {
+    // Only skip if we successfully resolved a path before
+    // If resolution failed previously, allow retry (user may have installed CLI)
+    if (this.cliPathResolved && !this.cliPathResolutionFailed) {
       return;
     }
+
+    // Reset failure flag for retry attempt
+    this.cliPathResolutionFailed = false;
 
     const configuredPath = getConfigurationService().get('cliPath');
     logger.debug(`Configured CLI path: ${configuredPath}`);
@@ -96,6 +106,7 @@ export class BoundaryCLI implements IBoundaryCLI {
         await execAsync(`"${configuredPath}" version`, { timeout: 5000 });
         logger.info(`Using configured CLI path: ${configuredPath}`);
         this.cliPathResolved = true;
+        this.cliPathResolutionFailed = false;
         return;
       } catch (err) {
         logger.warn(`Configured CLI path '${configuredPath}' not found, trying auto-discovery...`);
@@ -106,11 +117,15 @@ export class BoundaryCLI implements IBoundaryCLI {
     const foundPath = await this.findCliPath();
     if (foundPath) {
       this.resolvedCliPath = foundPath;
+      this.cliPathResolved = true;
+      this.cliPathResolutionFailed = false;
       logger.info(`Auto-discovered CLI at: ${foundPath}`);
     } else {
       logger.warn('CLI not found in any common paths');
+      // Mark as resolved but failed - allows retry on next call
+      this.cliPathResolved = true;
+      this.cliPathResolutionFailed = true;
     }
-    this.cliPathResolved = true;
   }
 
   /**
@@ -174,7 +189,17 @@ export class BoundaryCLI implements IBoundaryCLI {
       const pwdCreds = credentials as PasswordCredentials;
       args.push('-auth-method-id', pwdCreds.authMethodId);
       args.push('-login-name', pwdCreds.loginName);
-      args.push('-password', pwdCreds.password);
+      // Password is passed via environment variable to avoid exposure in process listings
+      // Boundary CLI supports BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD env var
+      try {
+        const result = await this.executeWithPassword(args, pwdCreds.password);
+        return parseAuthResponse(result.stdout);
+      } catch (error) {
+        if (error instanceof BoundaryError) {
+          return { success: false, error: error.message };
+        }
+        return { success: false, error: String(error) };
+      }
     } else if (method === 'oidc' && credentials) {
       args.push('-auth-method-id', credentials.authMethodId);
     }
@@ -187,6 +212,69 @@ export class BoundaryCLI implements IBoundaryCLI {
         return { success: false, error: error.message };
       }
       return { success: false, error: String(error) };
+    }
+  }
+
+  /**
+   * Execute a Boundary CLI command with password passed securely via env var
+   * This prevents password exposure in process listings (ps aux, etc.)
+   */
+  private async executeWithPassword(args: string[], password: string, timeoutMs = 30000): Promise<CLIExecutionResult> {
+    const cliPath = this.cliPath;
+    const command = `"${cliPath}" ${args.map(a => `"${a}"`).join(' ')} -password env://BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD`;
+    const baseEnv = this.getCliEnv();
+    const env: NodeJS.ProcessEnv = {
+      ...baseEnv,
+      BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD: password,
+    };
+
+    logger.debug(`Executing (with password via env): ${cliPath} ${args.join(' ')} -password env://...`);
+    logger.debug(`Environment: BOUNDARY_ADDR=${baseEnv.BOUNDARY_ADDR || ''}, BOUNDARY_TLS_INSECURE=${baseEnv.BOUNDARY_TLS_INSECURE || ''}`);
+
+    try {
+      const { stdout, stderr } = await execAsync(command, {
+        env,
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: timeoutMs,
+      });
+
+      return {
+        stdout,
+        stderr,
+        exitCode: 0,
+      };
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'code' in error) {
+        const execError = error as { code: number | string; stdout?: string; stderr?: string; message: string };
+
+        if (execError.code === 127 || execError.code === 'ENOENT' ||
+            (execError.stderr && execError.stderr.includes('not found'))) {
+          throw new BoundaryError(
+            'Boundary CLI not found',
+            BoundaryErrorCode.CLI_NOT_FOUND
+          );
+        }
+
+        if (execError.stdout) {
+          return {
+            stdout: execError.stdout,
+            stderr: execError.stderr || '',
+            exitCode: typeof execError.code === 'number' ? execError.code : 1,
+          };
+        }
+
+        throw new BoundaryError(
+          execError.stderr || execError.message,
+          BoundaryErrorCode.CLI_EXECUTION_FAILED,
+          error
+        );
+      }
+
+      throw new BoundaryError(
+        String(error),
+        BoundaryErrorCode.CLI_EXECUTION_FAILED,
+        error
+      );
     }
   }
 

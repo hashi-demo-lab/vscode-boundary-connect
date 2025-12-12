@@ -15,7 +15,7 @@ export function createSession(
   localPort: number
 ): Session {
   return {
-    id: `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    id: `session-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
     targetId: target.id,
     targetName: target.name,
     targetType: target.type,

@@ -24,16 +24,23 @@ export class TargetProvider implements ITargetProvider {
   private error: string | undefined;
   private targets: BoundaryTarget[] = [];
 
-  constructor() {
-    // Listen for target changes
-    getTargetService().onTargetsChanged(() => {
-      this.refresh();
-    });
+  // Store disposables to prevent memory leaks
+  private readonly disposables: vscode.Disposable[] = [];
 
-    // Listen for auth state changes
-    getAuthStateManager().onStateChanged((state) => {
-      this.handleAuthStateChange(state);
-    });
+  constructor() {
+    // Listen for target changes - store disposable for cleanup
+    this.disposables.push(
+      getTargetService().onTargetsChanged(() => {
+        this.refresh();
+      })
+    );
+
+    // Listen for auth state changes - store disposable for cleanup
+    this.disposables.push(
+      getAuthStateManager().onStateChanged((state) => {
+        this.handleAuthStateChange(state);
+      })
+    );
   }
 
   /**
@@ -183,6 +190,11 @@ export class TargetProvider implements ITargetProvider {
   }
 
   dispose(): void {
+    // Dispose all event listeners to prevent memory leaks
+    for (const disposable of this.disposables) {
+      disposable.dispose();
+    }
+    this.disposables.length = 0;
     this._onDidChangeTreeData.dispose();
   }
 }

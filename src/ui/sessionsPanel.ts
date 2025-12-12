@@ -422,33 +422,15 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
 
       // Expose functions globally for onclick handlers
       window.disconnect = function(sessionId) {
-        console.log('[Boundary] Disconnect clicked for session:', sessionId);
-        try {
-          vscode.postMessage({ command: 'disconnect', sessionId: sessionId });
-          console.log('[Boundary] Message posted successfully');
-        } catch (err) {
-          console.error('[Boundary] Failed to post message:', err);
-        }
+        vscode.postMessage({ command: 'disconnect', sessionId: sessionId });
       };
 
       window.disconnectAll = function() {
-        console.log('[Boundary] Disconnect all clicked');
-        try {
-          vscode.postMessage({ command: 'disconnectAll' });
-          console.log('[Boundary] Message posted successfully');
-        } catch (err) {
-          console.error('[Boundary] Failed to post message:', err);
-        }
+        vscode.postMessage({ command: 'disconnectAll' });
       };
 
       window.copyPort = function(port) {
-        console.log('[Boundary] Copy port clicked:', port);
-        try {
-          vscode.postMessage({ command: 'copyPort', port: port });
-          console.log('[Boundary] Message posted successfully');
-        } catch (err) {
-          console.error('[Boundary] Failed to post message:', err);
-        }
+        vscode.postMessage({ command: 'copyPort', port: port });
       };
 
       // Also attach event listeners as backup (delegated to body)
@@ -459,7 +441,6 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
           const card = button.closest('.session-card');
           if (card) {
             const sessionId = card.dataset.sessionId;
-            console.log('[Boundary] Disconnect via event listener for session:', sessionId);
             if (sessionId) {
               window.disconnect(sessionId);
             }
@@ -468,21 +449,17 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
 
         const disconnectAllBtn = target.closest('.btn-danger-outline');
         if (disconnectAllBtn) {
-          console.log('[Boundary] Disconnect all via event listener');
           window.disconnectAll();
         }
 
         const portEl = target.closest('.detail-value.port');
         if (portEl) {
           const port = portEl.textContent.replace(':', '').trim();
-          console.log('[Boundary] Copy port via event listener:', port);
           if (port) {
             window.copyPort(port);
           }
         }
       });
-
-      console.log('[Boundary] Sessions panel script initialized');
     })();
   </script>
 </body>
@@ -490,8 +467,13 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private _renderSessions(sessions: Session[]): string {
-    const sessionCards = sessions.map(session => `
-      <div class="session-card" data-session-id="${session.id}">
+    const sessionCards = sessions.map(session => {
+      // Escape values for safe use in JavaScript onclick handlers
+      const safeSessionId = this._escapeJsString(session.id);
+      const safePort = this._escapeJsString(String(session.localPort));
+
+      return `
+      <div class="session-card" data-session-id="${this._escapeHtml(session.id)}">
         <div class="session-header">
           <span class="session-target">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -502,13 +484,13 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             </svg>
             ${this._escapeHtml(session.targetName)}
           </span>
-          <span class="session-type">${session.targetType.toUpperCase()}</span>
+          <span class="session-type">${this._escapeHtml(session.targetType.toUpperCase())}</span>
         </div>
         <div class="session-details">
           <div class="detail-item">
             <span class="detail-label">Local Port</span>
-            <span class="detail-value port" onclick="copyPort('${session.localPort}')" title="Click to copy">
-              :${session.localPort}
+            <span class="detail-value port" onclick="copyPort('${safePort}')" title="Click to copy">
+              :${this._escapeHtml(String(session.localPort))}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -517,11 +499,11 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
           </div>
           <div class="detail-item">
             <span class="detail-label">Session ID</span>
-            <span class="detail-value">${session.id.slice(0, 8)}...</span>
+            <span class="detail-value">${this._escapeHtml(session.id.slice(0, 8))}...</span>
           </div>
         </div>
         <div class="session-actions">
-          <button class="btn btn-disconnect" onclick="disconnect('${session.id}')">
+          <button class="btn btn-disconnect" onclick="disconnect('${safeSessionId}')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
               <line x1="12" y1="2" x2="12" y2="12"/>
@@ -530,7 +512,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
           </button>
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
 
     return `
       <div class="stats-bar">
@@ -581,6 +564,21 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  /**
+   * Escape a string for safe use in JavaScript string literals.
+   * Prevents XSS when inserting values into onclick handlers.
+   */
+  private _escapeJsString(text: string): string {
+    return text
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/</g, '\\x3c')
+      .replace(/>/g, '\\x3e');
   }
 
   public dispose(): void {
