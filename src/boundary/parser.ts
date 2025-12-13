@@ -1,9 +1,169 @@
 /**
  * Boundary CLI output parser utilities
+ *
+ * Uses Zod for runtime validation of CLI responses to catch
+ * malformed or unexpected output early.
  */
 
+import { z } from 'zod';
 import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
 import { AuthResult, BoundaryAuthMethod, BoundaryScope, BoundaryTarget, SessionAuthorization } from '../types';
+import { logger } from '../utils/logger';
+
+// ============================================================================
+// Zod Schemas for Runtime Validation
+// ============================================================================
+
+/**
+ * API error schema (appears in both 'error' and 'api_error' fields)
+ */
+const ApiErrorSchema = z.object({
+  kind: z.string(),
+  message: z.string(),
+}).optional();
+
+/**
+ * Base API response schema - all Boundary CLI responses follow this pattern
+ */
+const BaseApiResponseSchema = z.object({
+  status_code: z.number().optional(),
+  status: z.string().optional(),
+  context: z.string().optional(),
+  error: ApiErrorSchema,
+  api_error: ApiErrorSchema,
+});
+
+/**
+ * Auth method response schema
+ */
+const AuthMethodItemSchema = z.object({
+  id: z.string(),
+  scope_id: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  type: z.enum(['oidc', 'password', 'ldap']),
+  is_primary: z.boolean().optional().default(false),
+  created_time: z.string().optional(),
+  updated_time: z.string().optional(),
+});
+
+const AuthMethodsResponseSchema = BaseApiResponseSchema.extend({
+  items: z.array(AuthMethodItemSchema).optional().default([]),
+});
+
+/**
+ * Scope response schema
+ */
+const ScopeItemSchema = z.object({
+  id: z.string(),
+  scope_id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  type: z.enum(['global', 'org', 'project']),
+});
+
+const ScopesResponseSchema = BaseApiResponseSchema.extend({
+  items: z.array(ScopeItemSchema).optional().default([]),
+});
+
+/**
+ * Target response schema
+ */
+const TargetScopeSchema = z.object({
+  id: z.string(),
+  type: z.enum(['global', 'org', 'project']),
+  name: z.string(),
+  description: z.string().optional(),
+  parent_scope_id: z.string().optional(),
+});
+
+const TargetItemSchema = z.object({
+  id: z.string(),
+  scope_id: z.string(),
+  scope: TargetScopeSchema,
+  name: z.string(),
+  description: z.string().optional(),
+  type: z.enum(['tcp', 'ssh', 'rdp']),
+  attributes: z.object({
+    default_port: z.number().optional(),
+  }).optional(),
+  session_max_seconds: z.number().optional(),
+  session_connection_limit: z.number().optional(),
+  authorized_actions: z.array(z.string()).optional().default([]),
+  created_time: z.string().optional(),
+  updated_time: z.string().optional(),
+});
+
+const TargetsResponseSchema = BaseApiResponseSchema.extend({
+  items: z.array(TargetItemSchema).optional().default([]),
+});
+
+/**
+ * Session authorization response schema
+ */
+const CredentialSourceSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  credential_store_id: z.string().optional(),
+  type: z.string().optional(),
+});
+
+const CredentialSchema = z.object({
+  username: z.string().optional(),
+  password: z.string().optional(),
+  private_key: z.string().optional(),
+  private_key_passphrase: z.string().optional(),
+});
+
+const BrokeredCredentialSchema = z.object({
+  credential_source: CredentialSourceSchema,
+  credential: CredentialSchema,
+});
+
+const SessionAuthItemSchema = z.object({
+  session_id: z.string(),
+  target_id: z.string().optional(),
+  authorization_token: z.string(),
+  endpoint: z.string(),
+  endpoint_port: z.number(),
+  expiration_time: z.string(),
+  credentials: z.array(BrokeredCredentialSchema).optional(),
+});
+
+const SessionAuthResponseSchema = BaseApiResponseSchema.extend({
+  item: SessionAuthItemSchema.optional(),
+});
+
+/**
+ * Safely parse JSON with validation using a Zod schema
+ */
+function safeParseJson<T extends z.ZodTypeAny>(
+  output: string,
+  schema: T,
+  context: string
+): z.infer<T> {
+  let json: unknown;
+  try {
+    json = JSON.parse(output);
+  } catch (error) {
+    throw new BoundaryError(
+      `Failed to parse JSON response: ${error instanceof Error ? error.message : String(error)}`,
+      BoundaryErrorCode.PARSE_ERROR,
+      { output: output.substring(0, 500) } // Truncate for logging
+    );
+  }
+
+  const result = schema.safeParse(json);
+  if (!result.success) {
+    logger.warn(`Zod validation failed for ${context}:`, result.error.format());
+    // Log but don't fail - fall back to loose parsing for backwards compatibility
+    // This allows the extension to work with newer CLI versions that add fields
+    return json as z.infer<T>;
+  }
+
+  return result.data;
+}
 
 // Regex patterns for parsing CLI output
 // Matches both old format: "Proxy listening on 127.0.0.1:PORT"
@@ -30,15 +190,16 @@ export function parseJsonResponse<T>(output: string): T {
  * Check if response indicates an error
  */
 export interface BoundaryApiResponse<T = unknown> {
-  status_code: number;
+  status_code?: number;
   status?: string;
   context?: string;
   item?: T;
   items?: T[];
+  // Error can be structured object or simple string
   error?: {
     kind: string;
     message: string;
-  };
+  } | string;
   // Some API responses use api_error instead of error
   api_error?: {
     kind: string;
@@ -47,21 +208,34 @@ export interface BoundaryApiResponse<T = unknown> {
 }
 
 export function isErrorResponse(response: BoundaryApiResponse): boolean {
-  return response.status_code >= 400 || response.error !== undefined || response.api_error !== undefined;
+  const statusCode = response.status_code ?? 200;
+  return statusCode >= 400 || response.error !== undefined || response.api_error !== undefined;
 }
 
 export function getErrorMessage(response: BoundaryApiResponse): string {
   const apiError = response.api_error || response.error;
-  if (apiError?.message) {
+
+  // Handle structured error object: { kind: string, message: string }
+  if (apiError && typeof apiError === 'object' && 'message' in apiError) {
     return apiError.message;
   }
+
+  // Handle string error (e.g., {"error": "Error trying to list targets: ..."})
+  if (typeof apiError === 'string') {
+    return apiError;
+  }
+
+  // Handle context field
   if (response.context) {
     return response.context;
   }
+
+  // Handle status field
   if (response.status) {
     return response.status;
   }
-  return `Request failed with status ${response.status_code}`;
+
+  return `Request failed with status ${response.status_code ?? 'unknown'}`;
 }
 
 /**
@@ -133,8 +307,11 @@ export function parseAuthResponse(output: string): AuthResult {
 
 /**
  * Parse auth methods list response
+ *
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
  */
-interface AuthMethodResponseItem {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _AuthMethodResponseItem {
   id: string;
   scope_id: string;
   name: string;
@@ -146,7 +323,7 @@ interface AuthMethodResponseItem {
 }
 
 export function parseAuthMethodsResponse(output: string): BoundaryAuthMethod[] {
-  const response = parseJsonResponse<BoundaryApiResponse<AuthMethodResponseItem>>(output);
+  const response = safeParseJson(output, AuthMethodsResponseSchema, 'authMethods');
 
   if (isErrorResponse(response)) {
     throw createErrorFromResponse(response);
@@ -183,8 +360,11 @@ function getDefaultAuthMethodName(type: string): string {
 
 /**
  * Parse scope list response
+ *
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
  */
-interface ScopeResponseItem {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _ScopeResponseItem {
   id: string;
   scope_id: string;
   name: string;
@@ -193,7 +373,7 @@ interface ScopeResponseItem {
 }
 
 export function parseScopesResponse(output: string): BoundaryScope[] {
-  const response = parseJsonResponse<BoundaryApiResponse<ScopeResponseItem>>(output);
+  const response = safeParseJson(output, ScopesResponseSchema, 'scopes');
 
   if (isErrorResponse(response)) {
     throw createErrorFromResponse(response);
@@ -211,8 +391,11 @@ export function parseScopesResponse(output: string): BoundaryScope[] {
 
 /**
  * Parse target list response
+ *
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
  */
-interface TargetResponseItem {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _TargetResponseItem {
   id: string;
   scope_id: string;
   scope: {
@@ -236,7 +419,7 @@ interface TargetResponseItem {
 }
 
 export function parseTargetsResponse(output: string): BoundaryTarget[] {
-  const response = parseJsonResponse<BoundaryApiResponse<TargetResponseItem>>(output);
+  const response = safeParseJson(output, TargetsResponseSchema, 'targets');
 
   if (isErrorResponse(response)) {
     throw createErrorFromResponse(response);
@@ -288,7 +471,11 @@ interface BrokeredCredentialItem {
   credential: CredentialItem;
 }
 
-interface SessionAuthResponseItem {
+/**
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _SessionAuthResponseItem {
   session_id: string;
   target_id: string;
   authorization_token: string;
@@ -299,7 +486,7 @@ interface SessionAuthResponseItem {
 }
 
 export function parseSessionAuthResponse(output: string): SessionAuthorization {
-  const response = parseJsonResponse<BoundaryApiResponse<SessionAuthResponseItem>>(output);
+  const response = safeParseJson(output, SessionAuthResponseSchema, 'sessionAuth');
 
   if (isErrorResponse(response)) {
     throw createErrorFromResponse(response);
@@ -367,13 +554,41 @@ export function extractVersion(output: string): string | undefined {
 }
 
 /**
+ * Helper to get error kind from potentially string or object error
+ */
+function getErrorKind(apiError: BoundaryApiResponse['error'] | BoundaryApiResponse['api_error']): string | undefined {
+  if (apiError && typeof apiError === 'object' && 'kind' in apiError) {
+    return apiError.kind;
+  }
+  return undefined;
+}
+
+/**
+ * Helper to get error message text from potentially string or object error
+ */
+function getErrorText(apiError: BoundaryApiResponse['error'] | BoundaryApiResponse['api_error']): string {
+  if (typeof apiError === 'string') {
+    return apiError.toLowerCase();
+  }
+  if (apiError && typeof apiError === 'object' && 'message' in apiError) {
+    return apiError.message.toLowerCase();
+  }
+  return '';
+}
+
+/**
  * Check if response indicates authentication is required (401 Unauthorized)
  */
 export function isAuthRequired(response: BoundaryApiResponse): boolean {
   const apiError = response.api_error || response.error;
+  const kind = getErrorKind(apiError);
+  const text = getErrorText(apiError);
+
   return response.status_code === 401 ||
-         apiError?.kind === 'Unauthorized' ||
-         apiError?.kind === 'Unauthenticated';
+         kind === 'Unauthorized' ||
+         kind === 'Unauthenticated' ||
+         text.includes('unauthorized') ||
+         text.includes('unauthenticated');
 }
 
 /**
@@ -381,9 +596,14 @@ export function isAuthRequired(response: BoundaryApiResponse): boolean {
  */
 export function isPermissionDenied(response: BoundaryApiResponse): boolean {
   const apiError = response.api_error || response.error;
+  const kind = getErrorKind(apiError);
+  const text = getErrorText(apiError);
+
   return response.status_code === 403 ||
-         apiError?.kind === 'Forbidden' ||
-         apiError?.kind === 'PermissionDenied';
+         kind === 'Forbidden' ||
+         kind === 'PermissionDenied' ||
+         text.includes('permission denied') ||
+         text.includes('forbidden');
 }
 
 /**
@@ -391,15 +611,16 @@ export function isPermissionDenied(response: BoundaryApiResponse): boolean {
  */
 export function isTokenExpired(response: BoundaryApiResponse): boolean {
   const apiError = response.api_error || response.error;
+  const kind = getErrorKind(apiError);
+  const text = getErrorText(apiError);
+
   // Token expired can be indicated by:
-  // - 401 with specific message about expiration
-  // - SessionExpired kind
-  if (apiError?.kind === 'SessionExpired' || apiError?.kind === 'TokenExpired') {
-    return true;
-  }
-  // Check message for expiration indicators (only as fallback for structured data)
-  const message = apiError?.message?.toLowerCase() || '';
-  return message.includes('expired') || message.includes('expir');
+  // - SessionExpired/TokenExpired kind
+  // - Message containing "expired"
+  return kind === 'SessionExpired' ||
+         kind === 'TokenExpired' ||
+         text.includes('expired') ||
+         text.includes('session has ended');
 }
 
 /**
@@ -416,10 +637,11 @@ export function classifyApiError(response: BoundaryApiResponse): BoundaryErrorCo
   }
 
   // Other error types based on status code
-  if (response.status_code === 404) {
+  const statusCode = response.status_code ?? 200;
+  if (statusCode === 404) {
     return BoundaryErrorCode.TARGET_NOT_FOUND;
   }
-  if (response.status_code >= 500) {
+  if (statusCode >= 500) {
     return BoundaryErrorCode.CLI_EXECUTION_FAILED;
   }
 

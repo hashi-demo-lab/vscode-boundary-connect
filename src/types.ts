@@ -57,6 +57,45 @@ export interface IAuthManager extends vscode.Disposable {
 }
 
 // ============================================================================
+// Auth State Types
+// ============================================================================
+
+/**
+ * Authentication state enum - explicit state machine
+ */
+export type AuthState =
+  | 'initializing'      // Extension starting up, checking auth
+  | 'unauthenticated'   // No valid token
+  | 'authenticating'    // Login in progress
+  | 'authenticated'     // Valid token available
+  | 'expired'           // Token expired, needs re-auth
+  | 'error';            // Auth system error
+
+/**
+ * State transition events
+ */
+export type AuthEvent =
+  | { type: 'INIT_COMPLETE'; hasToken: boolean }
+  | { type: 'LOGIN_START' }
+  | { type: 'LOGIN_SUCCESS' }
+  | { type: 'LOGIN_FAILURE'; error: string }
+  | { type: 'TOKEN_EXPIRED' }
+  | { type: 'LOGOUT' }
+  | { type: 'AUTH_ERROR'; error: string };
+
+/**
+ * Auth State Manager interface for dependency injection and testing
+ */
+export interface IAuthStateManager extends vscode.Disposable {
+  readonly state: AuthState;
+  readonly isAuthenticated: boolean;
+  readonly lastError: string | undefined;
+  dispatch(event: AuthEvent): void;
+  reset(): void;
+  readonly onStateChanged: vscode.Event<AuthState>;
+}
+
+// ============================================================================
 // Boundary Domain Types
 // ============================================================================
 
@@ -95,6 +134,15 @@ export interface BoundaryTarget {
 // CLI Types
 // ============================================================================
 
+/**
+ * Result type for token retrieval - distinguishes between
+ * "no token", "token found", and "CLI error"
+ */
+export type TokenResult =
+  | { status: 'found'; token: string }
+  | { status: 'not_found' }
+  | { status: 'cli_error'; error: string };
+
 export interface CLIExecutionResult {
   stdout: string;
   stderr: string;
@@ -125,7 +173,7 @@ export interface IBoundaryCLI extends vscode.Disposable {
   checkInstalled(): Promise<boolean>;
   getVersion(): Promise<string | undefined>;
   authenticate(method: AuthMethod, credentials?: Credentials): Promise<AuthResult>;
-  getToken(): Promise<string | undefined>;
+  getToken(): Promise<TokenResult>;
   listAuthMethods(scopeId?: string): Promise<BoundaryAuthMethod[]>;
   listTargets(scopeId?: string, recursive?: boolean): Promise<BoundaryTarget[]>;
   listScopes(parentScopeId?: string): Promise<BoundaryScope[]>;
@@ -208,9 +256,28 @@ export interface TargetTreeItemData {
   target?: BoundaryTarget;
 }
 
-export interface ITargetProvider extends vscode.TreeDataProvider<TargetTreeItemData> {
+export interface ITargetProvider extends vscode.TreeDataProvider<TargetTreeItemData>, vscode.Disposable {
   refresh(): void;
   setAuthManager(authManager: IAuthManager): void;
+  /**
+   * Initialize event subscriptions (for lazy initialization)
+   * Should be called after construction when all dependencies are ready
+   */
+  initialize(): void;
+}
+
+/**
+ * Target Service interface for dependency injection and testing
+ */
+export interface ITargetService extends vscode.Disposable {
+  getAllTargets(forceRefresh?: boolean): Promise<BoundaryTarget[]>;
+  getTargetsForScope(scopeId: string, forceRefresh?: boolean): Promise<BoundaryTarget[]>;
+  getTarget(targetId: string): Promise<BoundaryTarget | undefined>;
+  getScopes(forceRefresh?: boolean): Promise<BoundaryScope[]>;
+  groupTargetsByScope(targets: BoundaryTarget[]): Map<string, BoundaryTarget[]>;
+  refresh(): Promise<void>;
+  clearCache(): void;
+  readonly onTargetsChanged: vscode.Event<void>;
 }
 
 // ============================================================================

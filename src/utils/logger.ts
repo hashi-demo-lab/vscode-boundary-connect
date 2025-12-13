@@ -13,6 +13,67 @@ const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
   error: 3,
 };
 
+/**
+ * Sensitive field names that should be redacted in logs
+ */
+const SENSITIVE_FIELD_PATTERNS = [
+  /^password$/i,
+  /password$/i,  // matches oldPassword, newPassword, etc.
+  /^privateKey$/i,
+  /^privateKeyPassphrase$/i,
+  /^token$/i,
+  /token$/i,  // matches authorizationToken, accessToken, etc.
+  /^secret$/i,
+  /^apiKey$/i,
+];
+
+/**
+ * Check if a field name is sensitive and should be redacted
+ */
+function isSensitiveField(fieldName: string): boolean {
+  return SENSITIVE_FIELD_PATTERNS.some(pattern => pattern.test(fieldName));
+}
+
+/**
+ * Sanitize an object for logging by redacting sensitive fields
+ */
+function sanitizeForLogging(data: unknown, seen = new WeakSet<object>()): unknown {
+  if (data === null || data === undefined) {
+    return data;
+  }
+
+  if (typeof data !== 'object') {
+    return data;
+  }
+
+  // Handle circular references - data is guaranteed to be non-null object here
+  // TypeScript narrows 'data' to 'object' after the typeof check
+  if (seen.has(data)) {
+    return '[Circular]';
+  }
+  seen.add(data);
+
+  // Handle arrays
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeForLogging(item, seen));
+  }
+
+  // Handle objects
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    if (isSensitiveField(key)) {
+      sanitized[key] = '[REDACTED]';
+    } else if (typeof value === 'object' && value !== null) {
+      sanitized[key] = sanitizeForLogging(value, seen);
+    } else {
+      sanitized[key] = value;
+    }
+  }
+
+  return sanitized;
+}
+
 export class Logger {
   private static instance: Logger | undefined;
   private outputChannel: vscode.OutputChannel;
@@ -49,7 +110,9 @@ export class Logger {
         }
         if (typeof arg === 'object') {
           try {
-            return JSON.stringify(arg, null, 2);
+            // Sanitize objects to redact sensitive fields before logging
+            const sanitized = sanitizeForLogging(arg);
+            return JSON.stringify(sanitized, null, 2);
           } catch {
             return String(arg);
           }

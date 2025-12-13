@@ -139,20 +139,49 @@ async function ensureSSHConfigEntry(options: RemoteSSHConnectionOptions & { targ
 }
 
 /**
- * Clean up old Boundary SSH config entries (optional maintenance)
+ * Remove a specific Boundary SSH config entry by port and target name
+ */
+export async function removeBoundarySSHConfigEntry(port: number, targetName?: string): Promise<void> {
+  const configPath = getSSHConfigPath();
+  const hostAlias = generateBoundaryHostAlias(port, targetName);
+
+  try {
+    const config = await fs.promises.readFile(configPath, 'utf-8');
+
+    // Remove the specific entry for this host alias
+    const entryRegex = new RegExp(
+      `\\n?${BOUNDARY_SSH_CONFIG_MARKER}\\n[^]*?Host ${hostAlias}\\n[^]*?(?=\\n${BOUNDARY_SSH_CONFIG_MARKER}|\\nHost |$)`,
+      'g'
+    );
+
+    const newConfig = config.replace(entryRegex, '');
+
+    if (newConfig !== config) {
+      await fs.promises.writeFile(configPath, newConfig, { mode: 0o600 });
+      logger.info(`Removed SSH config entry for ${hostAlias}`);
+    }
+  } catch (err) {
+    logger.debug(`Failed to remove SSH config entry for ${hostAlias}:`, err);
+  }
+}
+
+/**
+ * Clean up all Boundary SSH config entries (for extension deactivation or maintenance)
  */
 export async function cleanupBoundarySSHConfigEntries(): Promise<void> {
   const configPath = getSSHConfigPath();
 
   try {
-    let config = await fs.promises.readFile(configPath, 'utf-8');
+    const config = await fs.promises.readFile(configPath, 'utf-8');
 
     // Remove all Boundary-generated entries
     const boundaryEntryRegex = new RegExp(`\\n?${BOUNDARY_SSH_CONFIG_MARKER}\\n[^]*?(?=\\n${BOUNDARY_SSH_CONFIG_MARKER}|\\nHost |$)`, 'g');
-    config = config.replace(boundaryEntryRegex, '');
+    const newConfig = config.replace(boundaryEntryRegex, '');
 
-    await fs.promises.writeFile(configPath, config, { mode: 0o600 });
-    logger.info('Cleaned up Boundary SSH config entries');
+    if (newConfig !== config) {
+      await fs.promises.writeFile(configPath, newConfig, { mode: 0o600 });
+      logger.info('Cleaned up all Boundary SSH config entries');
+    }
   } catch (err) {
     logger.debug('Failed to cleanup SSH config entries:', err);
   }

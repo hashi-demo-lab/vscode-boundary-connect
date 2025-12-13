@@ -2,7 +2,8 @@
  * Boundary CLI wrapper
  */
 
-import { spawn, ChildProcess, exec } from 'child_process';
+import * as vscode from 'vscode';
+import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
 import {
   AuthMethod,
@@ -17,10 +18,13 @@ import {
   IBoundaryCLI,
   PasswordCredentials,
   SessionAuthorization,
+  TokenResult,
 } from '../types';
+import { generateConnectionId } from '../utils/id';
 import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
 import { logger } from '../utils/logger';
 import { getConfigurationService } from '../utils/config';
+import { IConfigurationService } from '../types';
 import {
   extractPort,
   extractVersion,
@@ -31,7 +35,7 @@ import {
   parseTargetsResponse,
 } from './parser';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const CONNECT_TIMEOUT_MS = 30000; // 30 seconds to capture port
 
@@ -48,9 +52,31 @@ export class BoundaryCLI implements IBoundaryCLI {
   private activeProcesses: Map<string, ChildProcess> = new Map();
   private resolvedCliPath: string | undefined;
   private cliPathResolved = false;
+  private cliPathResolutionFailed = false;
+  private configChangeSubscription: vscode.Disposable | undefined;
+  private readonly configService: IConfigurationService;
+
+  /**
+   * Create a new BoundaryCLI instance
+   * @param config - Configuration service (optional for backward compatibility)
+   */
+  constructor(config?: IConfigurationService) {
+    // Use provided config or fall back to singleton for backward compatibility
+    this.configService = config ?? getConfigurationService();
+
+    // Listen for config changes to reset CLI path resolution
+    this.configChangeSubscription = vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('boundary.cliPath')) {
+        logger.info('CLI path configuration changed, resetting resolution');
+        this.cliPathResolved = false;
+        this.cliPathResolutionFailed = false;
+        this.resolvedCliPath = undefined;
+      }
+    });
+  }
 
   private get cliPath(): string {
-    const configuredPath = getConfigurationService().get('cliPath');
+    const configuredPath = this.configService.get('cliPath');
     // If user configured a specific non-default path, use it
     if (configuredPath && configuredPath !== 'boundary') {
       return configuredPath;
@@ -67,7 +93,7 @@ export class BoundaryCLI implements IBoundaryCLI {
     for (const cliPath of COMMON_CLI_PATHS) {
       try {
         logger.debug(`Checking for Boundary CLI at: ${cliPath}`);
-        await execAsync(`"${cliPath}" version`, { timeout: 5000 });
+        await execFileAsync(cliPath, ['version'], { timeout: 5000 });
         logger.info(`Found Boundary CLI at: ${cliPath}`);
         return cliPath;
       } catch (err) {
@@ -80,22 +106,32 @@ export class BoundaryCLI implements IBoundaryCLI {
   /**
    * Ensure CLI path is resolved before use
    * Always tries to verify the path works, falls back to auto-discovery
+   *
+   * IMPORTANT: Only marks as resolved if we actually found a working CLI path.
+   * This allows retry on subsequent calls if the first attempt failed (e.g.,
+   * if PATH wasn't fully loaded during extension activation).
    */
   private async ensureCliPath(): Promise<void> {
-    if (this.cliPathResolved) {
+    // Only skip if we successfully resolved a path before
+    // If resolution failed previously, allow retry (user may have installed CLI)
+    if (this.cliPathResolved && !this.cliPathResolutionFailed) {
       return;
     }
 
-    const configuredPath = getConfigurationService().get('cliPath');
+    // Reset failure flag for retry attempt
+    this.cliPathResolutionFailed = false;
+
+    const configuredPath = this.configService.get('cliPath');
     logger.debug(`Configured CLI path: ${configuredPath}`);
 
     // If user set a custom path, verify it works first
     if (configuredPath && configuredPath !== 'boundary') {
       try {
         logger.debug(`Verifying configured path: ${configuredPath}`);
-        await execAsync(`"${configuredPath}" version`, { timeout: 5000 });
+        await execFileAsync(configuredPath, ['version'], { timeout: 5000 });
         logger.info(`Using configured CLI path: ${configuredPath}`);
         this.cliPathResolved = true;
+        this.cliPathResolutionFailed = false;
         return;
       } catch (err) {
         logger.warn(`Configured CLI path '${configuredPath}' not found, trying auto-discovery...`);
@@ -106,18 +142,22 @@ export class BoundaryCLI implements IBoundaryCLI {
     const foundPath = await this.findCliPath();
     if (foundPath) {
       this.resolvedCliPath = foundPath;
+      this.cliPathResolved = true;
+      this.cliPathResolutionFailed = false;
       logger.info(`Auto-discovered CLI at: ${foundPath}`);
     } else {
       logger.warn('CLI not found in any common paths');
+      // Mark as resolved but failed - allows retry on next call
+      this.cliPathResolved = true;
+      this.cliPathResolutionFailed = true;
     }
-    this.cliPathResolved = true;
   }
 
   /**
    * Get environment variables for CLI execution
    */
   private getCliEnv(): NodeJS.ProcessEnv {
-    const config = getConfigurationService().getConfiguration();
+    const config = this.configService.getConfiguration();
     const env = { ...process.env };
 
     // Set BOUNDARY_ADDR if configured
@@ -137,7 +177,7 @@ export class BoundaryCLI implements IBoundaryCLI {
    * Get keyring type args
    */
   private getKeyringArgs(): string[] {
-    const keyringType = getConfigurationService().get('keyringType');
+    const keyringType = this.configService.get('keyringType');
     return keyringType === 'none' ? ['-keyring-type', 'none'] : [];
   }
 
@@ -162,7 +202,8 @@ export class BoundaryCLI implements IBoundaryCLI {
     try {
       const result = await this.execute(['version']);
       return extractVersion(result.stdout);
-    } catch {
+    } catch (error) {
+      logger.debug('Failed to get CLI version:', error);
       return undefined;
     }
   }
@@ -174,15 +215,41 @@ export class BoundaryCLI implements IBoundaryCLI {
       const pwdCreds = credentials as PasswordCredentials;
       args.push('-auth-method-id', pwdCreds.authMethodId);
       args.push('-login-name', pwdCreds.loginName);
-      args.push('-password', pwdCreds.password);
-    } else if (method === 'oidc' && credentials) {
-      args.push('-auth-method-id', credentials.authMethodId);
+      // Password is passed via environment variable to avoid exposure in process listings
+      // Boundary CLI supports BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD env var
+      try {
+        const result = await this.executeWithPassword(args, pwdCreds.password);
+        return parseAuthResponse(result.stdout);
+      } catch (error) {
+        if (error instanceof BoundaryError) {
+          return { success: false, error: error.message };
+        }
+        return { success: false, error: String(error) };
+      }
+    } else if (method === 'oidc') {
+      // Only add auth method ID if provided (some servers auto-select primary)
+      const oidcCreds = credentials as { authMethodId?: string } | undefined;
+      if (oidcCreds?.authMethodId) {
+        args.push('-auth-method-id', oidcCreds.authMethodId);
+      }
     }
 
+    // OIDC auth needs longer timeout (5 min) since it waits for browser interaction
+    const timeout = method === 'oidc' ? 300000 : 30000;
+
+    const env = this.getCliEnv();
+    logger.info(`Executing authenticate: ${method}`);
+    logger.info(`CLI args: ${args.join(' ')}`);
+    logger.info(`BOUNDARY_ADDR: ${env.BOUNDARY_ADDR || '(not set)'}`);
+    logger.info(`BOUNDARY_TLS_INSECURE: ${env.BOUNDARY_TLS_INSECURE || '(not set)'}`);
+
     try {
-      const result = await this.execute(args);
+      const result = await this.execute(args, timeout);
+      logger.info('Auth command completed successfully');
+      logger.debug('Auth result stdout:', result.stdout.substring(0, 500));
       return parseAuthResponse(result.stdout);
     } catch (error) {
+      logger.error('Auth error:', error);
       if (error instanceof BoundaryError) {
         return { success: false, error: error.message };
       }
@@ -190,13 +257,93 @@ export class BoundaryCLI implements IBoundaryCLI {
     }
   }
 
-  async getToken(): Promise<string | undefined> {
+  /**
+   * Execute a Boundary CLI command with password passed securely via env var
+   * This prevents password exposure in process listings (ps aux, etc.)
+   */
+  private async executeWithPassword(args: string[], password: string, timeoutMs = 30000): Promise<CLIExecutionResult> {
+    const cliPath = this.cliPath;
+    const baseEnv = this.getCliEnv();
+    const env: NodeJS.ProcessEnv = {
+      ...baseEnv,
+      BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD: password,
+    };
+
+    // Add the password flag to args
+    const fullArgs = [...args, '-password', 'env://BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD'];
+
+    logger.debug(`Executing (with password via env): ${cliPath} ${args.join(' ')} -password env://...`);
+    logger.debug(`Environment: BOUNDARY_ADDR=${baseEnv.BOUNDARY_ADDR || ''}, BOUNDARY_TLS_INSECURE=${baseEnv.BOUNDARY_TLS_INSECURE || ''}`);
+
+    try {
+      const { stdout, stderr } = await execFileAsync(cliPath, fullArgs, {
+        env,
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: timeoutMs,
+      });
+
+      return {
+        stdout,
+        stderr,
+        exitCode: 0,
+      };
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'code' in error) {
+        const execError = error as { code: number | string; stdout?: string; stderr?: string; message: string };
+
+        if (execError.code === 127 || execError.code === 'ENOENT' ||
+            (execError.stderr && execError.stderr.includes('not found'))) {
+          throw new BoundaryError(
+            'Boundary CLI not found',
+            BoundaryErrorCode.CLI_NOT_FOUND
+          );
+        }
+
+        if (execError.stdout) {
+          return {
+            stdout: execError.stdout,
+            stderr: execError.stderr || '',
+            exitCode: typeof execError.code === 'number' ? execError.code : 1,
+          };
+        }
+
+        // Try to parse JSON error from stderr and classify appropriately
+        const errorSource = execError.stderr || execError.message;
+        const errorInfo = this.extractErrorInfo(errorSource);
+
+        throw new BoundaryError(
+          errorInfo.message,
+          errorInfo.code,
+          error
+        );
+      }
+
+      throw new BoundaryError(
+        String(error),
+        BoundaryErrorCode.CLI_EXECUTION_FAILED,
+        error
+      );
+    }
+  }
+
+  async getToken(): Promise<TokenResult> {
     try {
       const result = await this.execute(['config', 'get-token']);
       const token = result.stdout.trim();
-      return token || undefined;
-    } catch {
-      return undefined;
+      if (token) {
+        return { status: 'found', token };
+      }
+      return { status: 'not_found' };
+    } catch (error) {
+      // Distinguish CLI errors from "no token" - critical for first-install UX
+      if (error instanceof BoundaryError && error.code === BoundaryErrorCode.CLI_NOT_FOUND) {
+        logger.warn('Cannot check token: Boundary CLI not found');
+        return { status: 'cli_error', error: 'Boundary CLI not found. Please install it.' };
+      }
+
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.warn('Failed to retrieve token from CLI keyring:', error);
+      return { status: 'cli_error', error: errorMessage };
     }
   }
 
@@ -209,13 +356,12 @@ export class BoundaryCLI implements IBoundaryCLI {
       args.push('-scope-id', 'global');
     }
 
-    try {
-      const result = await this.execute(args);
-      return parseAuthMethodsResponse(result.stdout);
-    } catch (error) {
-      logger.warn('Failed to list auth methods:', error);
-      return [];
-    }
+    const env = this.getCliEnv();
+    logger.info(`listAuthMethods: BOUNDARY_ADDR=${env.BOUNDARY_ADDR || '(not set)'}`);
+
+    // Use shorter timeout for discovery (10s) - if server is unreachable, fail fast
+    const result = await this.execute(args, 10000);
+    return parseAuthMethodsResponse(result.stdout);
   }
 
   async listScopes(parentScopeId?: string): Promise<BoundaryScope[]> {
@@ -248,6 +394,9 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async connect(targetId: string, options: ConnectOptions = {}): Promise<Connection> {
+    // Ensure CLI path is resolved before spawning process
+    await this.ensureCliPath();
+
     // Always use 'boundary connect' (TCP proxy mode) for all target types
     // This creates a persistent local proxy that VS Code Remote SSH can connect to
     // The 'boundary connect ssh' subcommand auto-launches SSH which we don't want
@@ -268,7 +417,7 @@ export class BoundaryCLI implements IBoundaryCLI {
     }
 
     return new Promise((resolve, reject) => {
-      const sessionId = `session-${Date.now()}`;
+      const sessionId = generateConnectionId();
       logger.info(`Starting boundary connect for target ${targetId}`);
 
       const child = spawn(this.cliPath, args, {
@@ -367,18 +516,99 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   /**
+   * Extract error info from CLI output, including appropriate error code
+   * Handles JSON API error responses from Boundary
+   */
+  private extractErrorInfo(errorOutput: string): { message: string; code: BoundaryErrorCode } {
+    if (!errorOutput) {
+      return { message: 'Unknown error', code: BoundaryErrorCode.CLI_EXECUTION_FAILED };
+    }
+
+    const trimmed = errorOutput.trim();
+    let message = trimmed;
+    let code = BoundaryErrorCode.CLI_EXECUTION_FAILED;
+
+    // Check if it's JSON (Boundary API error response)
+    if (trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed) as {
+          api_error?: { message?: string };
+          error?: { message?: string; context?: string } | string;
+          context?: string;
+          status_code?: number;
+        };
+
+        // Extract meaningful message from API error structure
+        if (parsed.api_error?.message) {
+          message = parsed.api_error.message;
+        } else if (typeof parsed.error === 'object' && parsed.error?.message) {
+          message = parsed.error.message;
+        } else if (parsed.context) {
+          message = parsed.context;
+        } else if (typeof parsed.error === 'string') {
+          message = parsed.error;
+        }
+
+        // Classify the error code based on the parsed response
+        code = this.classifyErrorMessage(message, parsed.status_code);
+      } catch {
+        // Not valid JSON, fall through
+      }
+    } else {
+      // Plain text error - classify based on message
+      code = this.classifyErrorMessage(message);
+    }
+
+    // Truncate if too long
+    if (message.length > 200) {
+      message = message.substring(0, 197) + '...';
+    }
+
+    return { message, code };
+  }
+
+  /**
+   * Classify error message into appropriate BoundaryErrorCode
+   */
+  private classifyErrorMessage(message: string, statusCode?: number): BoundaryErrorCode {
+    const lowerMessage = message.toLowerCase();
+
+    // Check for auth-related errors
+    if (statusCode === 401 || statusCode === 403 ||
+        lowerMessage.includes('unauthorized') ||
+        lowerMessage.includes('unauthenticated') ||
+        lowerMessage.includes('forbidden') ||
+        lowerMessage.includes('permission denied')) {
+      return BoundaryErrorCode.AUTH_FAILED;
+    }
+
+    // Check for token expiration
+    if (lowerMessage.includes('expired') ||
+        lowerMessage.includes('session has ended') ||
+        lowerMessage.includes('token')) {
+      return BoundaryErrorCode.TOKEN_EXPIRED;
+    }
+
+    // Check for not found
+    if (statusCode === 404 || lowerMessage.includes('not found')) {
+      return BoundaryErrorCode.TARGET_NOT_FOUND;
+    }
+
+    return BoundaryErrorCode.CLI_EXECUTION_FAILED;
+  }
+
+  /**
    * Execute a Boundary CLI command
    */
   private async execute(args: string[], timeoutMs = 30000): Promise<CLIExecutionResult> {
     const cliPath = this.cliPath;
-    const command = `"${cliPath}" ${args.map(a => `"${a}"`).join(' ')}`;
     const env = this.getCliEnv();
 
     logger.debug(`Executing: ${cliPath} ${args.join(' ')}`);
     logger.debug(`Environment: BOUNDARY_ADDR=${env.BOUNDARY_ADDR}, BOUNDARY_TLS_INSECURE=${env.BOUNDARY_TLS_INSECURE}`);
 
     try {
-      const { stdout, stderr } = await execAsync(command, {
+      const { stdout, stderr } = await execFileAsync(cliPath, args, {
         env,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
         timeout: timeoutMs,
@@ -390,9 +620,14 @@ export class BoundaryCLI implements IBoundaryCLI {
         exitCode: 0,
       };
     } catch (error: unknown) {
-      // exec throws on non-zero exit
+      // execFile throws on non-zero exit
+      logger.error('CLI execution error:', error);
+
       if (error && typeof error === 'object' && 'code' in error) {
         const execError = error as { code: number | string; stdout?: string; stderr?: string; message: string };
+        logger.error(`CLI exit code: ${execError.code}`);
+        logger.error(`CLI stdout: ${execError.stdout?.substring(0, 500) || '(empty)'}`);
+        logger.error(`CLI stderr: ${execError.stderr?.substring(0, 500) || '(empty)'}`);
 
         // Check if it's a "command not found" error
         if (execError.code === 127 || execError.code === 'ENOENT' ||
@@ -412,9 +647,13 @@ export class BoundaryCLI implements IBoundaryCLI {
           };
         }
 
+        // Try to parse JSON error from stderr and classify appropriately
+        const errorSource = execError.stderr || execError.message;
+        const errorInfo = this.extractErrorInfo(errorSource);
+
         throw new BoundaryError(
-          execError.stderr || execError.message,
-          BoundaryErrorCode.CLI_EXECUTION_FAILED,
+          errorInfo.message,
+          errorInfo.code,
           error
         );
       }
@@ -436,13 +675,18 @@ export class BoundaryCLI implements IBoundaryCLI {
       logger.info(`Killing process for session ${sessionId}`);
       process.kill('SIGTERM');
 
-      // Force kill after timeout
-      setTimeout(() => {
+      // Force kill after timeout if process doesn't exit
+      const forceKillTimeout = setTimeout(() => {
         if (!process.killed) {
           logger.warn(`Force killing process for session ${sessionId}`);
           process.kill('SIGKILL');
         }
       }, 5000);
+
+      // Clear timeout when process exits to prevent memory leak
+      process.once('exit', () => {
+        clearTimeout(forceKillTimeout);
+      });
 
       this.activeProcesses.delete(sessionId);
       return true;
@@ -463,6 +707,10 @@ export class BoundaryCLI implements IBoundaryCLI {
 
   dispose(): void {
     this.killAllProcesses();
+    if (this.configChangeSubscription) {
+      this.configChangeSubscription.dispose();
+      this.configChangeSubscription = undefined;
+    }
   }
 }
 

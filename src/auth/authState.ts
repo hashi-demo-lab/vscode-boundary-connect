@@ -9,30 +9,11 @@
  */
 
 import * as vscode from 'vscode';
+import { AuthState, AuthEvent, IAuthStateManager } from '../types';
 import { logger } from '../utils/logger';
 
-/**
- * Authentication state enum - explicit state machine
- */
-export type AuthState =
-  | 'initializing'      // Extension starting up, checking auth
-  | 'unauthenticated'   // No valid token
-  | 'authenticating'    // Login in progress
-  | 'authenticated'     // Valid token available
-  | 'expired'           // Token expired, needs re-auth
-  | 'error';            // Auth system error
-
-/**
- * State transition events
- */
-export type AuthEvent =
-  | { type: 'INIT_COMPLETE'; hasToken: boolean }
-  | { type: 'LOGIN_START' }
-  | { type: 'LOGIN_SUCCESS' }
-  | { type: 'LOGIN_FAILURE'; error: string }
-  | { type: 'TOKEN_EXPIRED' }
-  | { type: 'LOGOUT' }
-  | { type: 'AUTH_ERROR'; error: string };
+// Re-export types for backward compatibility
+export type { AuthState, AuthEvent } from '../types';
 
 /**
  * Valid state transitions
@@ -50,7 +31,7 @@ const VALID_TRANSITIONS: Record<AuthState, AuthState[]> = {
  * Authentication State Manager
  * Manages auth state transitions and notifies listeners
  */
-export class AuthStateManager {
+export class AuthStateManager implements IAuthStateManager {
   private _state: AuthState = 'initializing';
   private _lastError: string | undefined;
 
@@ -159,6 +140,16 @@ export class AuthStateManager {
 // Singleton instance
 let stateManagerInstance: AuthStateManager | undefined;
 
+/**
+ * Create a new AuthStateManager instance (for DI)
+ */
+export function createAuthStateManager(): AuthStateManager {
+  return new AuthStateManager();
+}
+
+/**
+ * Get the singleton AuthStateManager instance (for backward compatibility)
+ */
 export function getAuthStateManager(): AuthStateManager {
   if (!stateManagerInstance) {
     stateManagerInstance = new AuthStateManager();

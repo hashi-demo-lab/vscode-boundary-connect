@@ -8,12 +8,13 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget, IAuthManager, ITargetProvider, TargetTreeItemData } from '../types';
+import { BoundaryTarget, IAuthManager, IAuthStateManager, ITargetProvider, ITargetService, TargetTreeItemData } from '../types';
 import { TargetTreeItem, createErrorItem, createLoadingItem, createTargetItem } from './targetItem';
 import { getTargetService } from './targetService';
 import { logger } from '../utils/logger';
 import { isAuthRequired } from '../utils/errors';
-import { getAuthStateManager, AuthState } from '../auth/authState';
+import { AuthState, getAuthStateManager } from '../auth/authState';
+import { getConfigurationService } from '../utils/config';
 
 export class TargetProvider implements ITargetProvider {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TargetTreeItemData | undefined | null | void>();
@@ -24,16 +25,49 @@ export class TargetProvider implements ITargetProvider {
   private error: string | undefined;
   private targets: BoundaryTarget[] = [];
 
-  constructor() {
-    // Listen for target changes
-    getTargetService().onTargetsChanged(() => {
-      this.refresh();
-    });
+  // Store disposables to prevent memory leaks
+  private readonly disposables: vscode.Disposable[] = [];
 
-    // Listen for auth state changes
-    getAuthStateManager().onStateChanged((state) => {
-      this.handleAuthStateChange(state);
-    });
+  // Injected dependencies (with lazy fallbacks for backward compatibility)
+  private readonly targetService: ITargetService;
+  private readonly authStateManager: IAuthStateManager;
+  private initialized = false;
+
+  /**
+   * Create a new TargetProvider
+   * @param targetService - Target service (optional for backward compatibility)
+   * @param authStateManager - Auth state manager (optional for backward compatibility)
+   */
+  constructor(targetService?: ITargetService, authStateManager?: IAuthStateManager) {
+    this.targetService = targetService ?? getTargetService();
+    this.authStateManager = authStateManager ?? getAuthStateManager();
+  }
+
+  /**
+   * Initialize event subscriptions
+   * Called after construction to enable lazy initialization and avoid
+   * circular dependencies during service container setup
+   */
+  initialize(): void {
+    if (this.initialized) {
+      return;
+    }
+
+    // Listen for target changes - store disposable for cleanup
+    this.disposables.push(
+      this.targetService.onTargetsChanged(() => {
+        this.refresh();
+      })
+    );
+
+    // Listen for auth state changes - store disposable for cleanup
+    this.disposables.push(
+      this.authStateManager.onStateChanged((state) => {
+        this.handleAuthStateChange(state);
+      })
+    );
+
+    this.initialized = true;
   }
 
   /**
@@ -44,14 +78,83 @@ export class TargetProvider implements ITargetProvider {
   }
 
   /**
+   * Extract a user-friendly error message from an error
+   * Handles BoundaryError with getUserMessage() and parses JSON error responses
+   */
+  private extractUserFriendlyError(err: unknown): string {
+    // Import BoundaryError dynamically to avoid circular deps at module level
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const { BoundaryError } = require('../utils/errors') as { BoundaryError: typeof import('../utils/errors').BoundaryError };
+
+    // Use BoundaryError's getUserMessage() if available
+    if (err instanceof BoundaryError) {
+      return err.getUserMessage();
+    }
+
+    if (err instanceof Error) {
+      const message = err.message;
+
+      // Check if message is JSON (raw API error response)
+      if (message.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(message) as {
+            api_error?: { message?: string };
+            error?: { message?: string };
+            context?: string;
+          };
+          // Extract meaningful parts from API error response
+          if (parsed.api_error?.message) {
+            return parsed.api_error.message;
+          }
+          if (parsed.error?.message) {
+            return parsed.error.message;
+          }
+          if (parsed.context) {
+            return parsed.context;
+          }
+        } catch {
+          // Not valid JSON, use message as-is but truncate if too long
+        }
+      }
+
+      // Truncate very long messages for display
+      if (message.length > 100) {
+        return message.substring(0, 97) + '...';
+      }
+
+      return message;
+    }
+
+    return 'Failed to fetch targets';
+  }
+
+  /**
+   * Check if Boundary address is configured (setting or env var)
+   */
+  private isAddressConfigured(): boolean {
+    const config = getConfigurationService();
+    const addrSetting = config.get('addr');
+    const addrEnvVar = process.env.BOUNDARY_ADDR;
+    return !!(addrSetting || addrEnvVar);
+  }
+
+  /**
    * Handle auth state changes from the state manager
    */
   private handleAuthStateChange(state: AuthState): void {
     logger.debug(`TargetProvider: auth state changed to ${state}`);
 
     if (state === 'authenticated') {
-      // Fetch targets when authenticated
-      void this.fetchTargets();
+      // Only fetch targets if address is configured
+      if (this.isAddressConfigured()) {
+        void this.fetchTargets();
+      } else {
+        logger.warn('TargetProvider: skipping target fetch - address not configured');
+        // Clear and show welcome view
+        this.targets = [];
+        this.error = undefined;
+        this._onDidChangeTreeData.fire();
+      }
     } else {
       // Clear targets when not authenticated
       this.targets = [];
@@ -64,11 +167,12 @@ export class TargetProvider implements ITargetProvider {
    * Check if currently authenticated (delegates to state manager)
    */
   private get isAuthenticated(): boolean {
-    return getAuthStateManager().isAuthenticated;
+    return this.authStateManager.isAuthenticated;
   }
 
   refresh(): void {
-    if (this.isAuthenticated) {
+    // Only fetch if address is configured and authenticated
+    if (this.isAddressConfigured() && this.isAuthenticated) {
       void this.fetchTargets();
     } else {
       this._onDidChangeTreeData.fire();
@@ -81,7 +185,7 @@ export class TargetProvider implements ITargetProvider {
     this._onDidChangeTreeData.fire();
 
     try {
-      this.targets = await getTargetService().getAllTargets(true);
+      this.targets = await this.targetService.getAllTargets(true);
       this.error = undefined;
     } catch (err) {
       logger.error('Failed to fetch targets:', err);
@@ -108,7 +212,8 @@ export class TargetProvider implements ITargetProvider {
           }
         });
       } else {
-        this.error = err instanceof Error ? err.message : 'Failed to fetch targets';
+        // Use user-friendly message from BoundaryError if available
+        this.error = this.extractUserFriendlyError(err);
       }
     } finally {
       this.loading = false;
@@ -123,6 +228,11 @@ export class TargetProvider implements ITargetProvider {
   getChildren(element?: TargetTreeItemData): TargetTreeItemData[] {
     // Root level
     if (!element) {
+      // Address not configured - return empty to show welcome view
+      if (!this.isAddressConfigured()) {
+        return [];
+      }
+
       // Not authenticated - return empty to show welcome view
       if (!this.isAuthenticated) {
         return [];
@@ -144,7 +254,7 @@ export class TargetProvider implements ITargetProvider {
       }
 
       // Group targets by scope and show
-      const grouped = getTargetService().groupTargetsByScope(this.targets);
+      const grouped = this.targetService.groupTargetsByScope(this.targets);
       const items: TargetTreeItemData[] = [];
 
       for (const [scopeName, scopeTargets] of grouped) {
@@ -168,7 +278,7 @@ export class TargetProvider implements ITargetProvider {
     // Scope children (targets)
     if (element.type === 'scope') {
       const scopeName = element.label;
-      const grouped = getTargetService().groupTargetsByScope(this.targets);
+      const grouped = this.targetService.groupTargetsByScope(this.targets);
       const scopeTargets = grouped.get(scopeName) || [];
       return scopeTargets.map(createTargetItem);
     }
@@ -183,11 +293,24 @@ export class TargetProvider implements ITargetProvider {
   }
 
   dispose(): void {
+    // Dispose all event listeners to prevent memory leaks
+    for (const disposable of this.disposables) {
+      disposable.dispose();
+    }
+    this.disposables.length = 0;
     this._onDidChangeTreeData.dispose();
   }
 }
 
-// Factory function
-export function createTargetProvider(): TargetProvider {
-  return new TargetProvider();
+/**
+ * Factory function for backward compatibility
+ * Creates and initializes the provider with singleton dependencies
+ */
+export function createTargetProvider(
+  targetService?: ITargetService,
+  authStateManager?: IAuthStateManager
+): TargetProvider {
+  const provider = new TargetProvider(targetService, authStateManager);
+  provider.initialize();
+  return provider;
 }

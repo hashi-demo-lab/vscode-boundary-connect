@@ -1,0 +1,138 @@
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#7C3AED',
+    'primaryTextColor': '#FFFFFF',
+    'primaryBorderColor': '#5B21B6',
+    'secondaryColor': '#10B981',
+    'lineColor': '#6B7280',
+    'textColor': '#1F2937',
+    'actorBkg': '#7C3AED',
+    'actorBorder': '#5B21B6',
+    'actorTextColor': '#FFFFFF',
+    'actorLineColor': '#9CA3AF',
+    'signalColor': '#374151',
+    'signalTextColor': '#1F2937',
+    'labelBoxBkgColor': '#F3F4F6',
+    'labelBoxBorderColor': '#D1D5DB',
+    'labelTextColor': '#1F2937',
+    'loopTextColor': '#374151',
+    'noteBorderColor': '#D1D5DB',
+    'noteBkgColor': '#F9FAFB',
+    'noteTextColor': '#1F2937',
+    'activationBorderColor': '#7C3AED',
+    'activationBkgColor': '#EDE9FE',
+    'sequenceNumberColor': '#FFFFFF'
+  },
+  'sequence': {
+    'diagramMarginX': 30,
+    'diagramMarginY': 20,
+    'actorMargin': 60,
+    'width': 150,
+    'height': 50,
+    'boxMargin': 8,
+    'boxTextMargin': 4,
+    'noteMargin': 8,
+    'messageMargin': 30,
+    'mirrorActors': false,
+    'showSequenceNumbers': true,
+    'wrap': true,
+    'wrapPadding': 10
+  }
+}}%%
+
+%% BOUNDARY VS CODE EXTENSION — AUTHENTICATION FLOW
+
+sequenceDiagram
+    autonumber
+
+    participant U as User
+    participant EXT as Extension
+    participant ASM as AuthState
+    participant AM as AuthManager
+    participant CLI as BoundaryCLI
+    participant BC as Boundary CLI
+    participant KR as Keyring
+    participant BS as Server
+    participant BR as Browser
+
+    rect rgb(243, 244, 246)
+        Note over EXT,ASM: PHASE 1: Extension Activation
+
+        EXT->>AM: createAuthManager()
+        AM->>ASM: getAuthStateManager()
+        ASM-->>ASM: state = initializing
+        EXT->>AM: initialize()
+        AM->>CLI: getToken()
+        CLI->>BC: boundary config get-token
+        BC->>KR: Read cached token
+
+        alt Token exists
+            KR-->>BC: token
+            BC-->>CLI: token
+            CLI-->>AM: token
+            AM->>ASM: dispatch(INIT_COMPLETE, hasToken=true)
+            ASM-->>ASM: state = authenticated
+        else No token
+            KR-->>BC: empty
+            AM->>ASM: dispatch(INIT_COMPLETE, hasToken=false)
+            ASM-->>ASM: state = unauthenticated
+        end
+
+        ASM->>EXT: setContext(boundary.authenticated)
+    end
+
+    rect rgb(236, 253, 245)
+        Note over U,BR: PHASE 2: OIDC Authentication
+
+        U->>EXT: boundary.login command
+        EXT->>AM: executeOidcAuth()
+        AM->>CLI: checkInstalled()
+        CLI-->>AM: true
+
+        AM->>CLI: listAuthMethods()
+        CLI->>BC: boundary auth-methods list
+        BC->>BS: GET /v1/auth-methods
+        BS-->>BC: auth methods JSON
+        BC-->>CLI: stdout
+        CLI-->>AM: BoundaryAuthMethod[]
+
+        AM->>U: Browser opening for sign-in
+        AM->>ASM: dispatch(LOGIN_START)
+        ASM-->>ASM: state = authenticating
+
+        AM->>CLI: authenticate(oidc, credentials)
+        CLI->>BC: boundary authenticate oidc
+
+        BC->>BR: Open browser
+        BR->>U: IdP login page
+        U->>BR: Enter credentials
+        BR->>BS: OIDC callback
+        BS-->>BC: Auth token
+        BC->>KR: Store token
+        BC-->>CLI: auth result
+        CLI-->>AM: AuthResult success
+
+        AM->>ASM: dispatch(LOGIN_SUCCESS)
+        ASM-->>ASM: state = authenticated
+        ASM->>EXT: setContext(authenticated, true)
+        EXT->>U: Successfully signed in
+    end
+
+    rect rgb(254, 242, 242)
+        Note over U,BS: PHASE 3: Token Expiration
+
+        U->>EXT: Request targets
+        EXT->>CLI: listTargets()
+        CLI->>BC: boundary targets list
+        BC->>BS: GET /v1/targets
+        BS-->>BC: 401 Unauthorized
+        BC-->>CLI: Error
+        CLI-->>EXT: TOKEN_EXPIRED
+
+        EXT->>AM: handleTokenExpired()
+        AM->>ASM: dispatch(TOKEN_EXPIRED)
+        ASM-->>ASM: state = expired
+        ASM->>EXT: setContext(authenticated, false)
+        EXT->>U: Session expired - sign in again
+    end

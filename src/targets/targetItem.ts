@@ -50,7 +50,7 @@ export class TargetTreeItem extends vscode.TreeItem {
         this.iconPath = new vscode.ThemeIcon('folder-library');
         break;
       case 'target':
-        this.iconPath = new vscode.ThemeIcon('server');
+        this.iconPath = new vscode.ThemeIcon('hubot');
         break;
       case 'loading':
         this.iconPath = new vscode.ThemeIcon('loading~spin');
@@ -66,17 +66,17 @@ export class TargetTreeItem extends vscode.TreeItem {
 
   private setCommand(data: TargetTreeItemData): void {
     switch (data.type) {
-      case 'target':
-        this.command = {
-          command: 'boundary.connectTarget',
-          title: 'Connect',
-          arguments: [data.target],
-        };
-        break;
+      // Targets use right-click context menu only (no single-click action)
       case 'login':
         this.command = {
           command: 'boundary.login',
           title: 'Login',
+        };
+        break;
+      case 'error':
+        this.command = {
+          command: 'boundary.refresh',
+          title: 'Refresh',
         };
         break;
     }
@@ -149,14 +149,15 @@ export function createLoadingItem(): TargetTreeItemData {
 }
 
 /**
- * Create an error item
+ * Create an error item (clickable to refresh)
  */
 export function createErrorItem(message: string): TargetTreeItemData {
   return {
     type: 'error',
     id: 'error',
     label: message,
-    tooltip: 'Click refresh to retry',
+    description: 'Click to refresh',
+    tooltip: 'Click to retry loading targets',
   };
 }
 

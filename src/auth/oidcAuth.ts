@@ -3,8 +3,7 @@
  */
 
 import * as vscode from 'vscode';
-import { AuthResult, BoundaryAuthMethod, OidcCredentials } from '../types';
-import { AuthManager } from './authManager';
+import { AuthResult, BoundaryAuthMethod, IAuthManager, OidcCredentials } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { getConfigurationService } from '../utils/config';
 import { logger } from '../utils/logger';
@@ -123,6 +122,19 @@ async function ensureBoundaryAddress(): Promise<boolean> {
   await config.update('addr', inputAddr, vscode.ConfigurationTarget.Global);
   logger.info(`Boundary address configured: ${inputAddr}`);
 
+  // Brief delay to ensure VS Code has persisted the configuration
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // Verify the config was saved correctly
+  const verifyAddr = config.get('addr');
+  logger.info(`Verified saved address: ${verifyAddr}`);
+  if (!verifyAddr) {
+    logger.error('Config was not saved correctly - addr is still empty');
+  }
+
+  // Update welcome view context so UI reflects the change
+  await vscode.commands.executeCommand('setContext', 'boundary.addrConfigured', true);
+
   // For HTTPS addresses, ask about TLS verification (many dev/internal deployments use self-signed certs)
   if (inputAddr.startsWith('https://') && !inputAddr.includes('boundaryproject.io')) {
     const tlsChoice = await vscode.window.showQuickPick(
@@ -160,10 +172,12 @@ async function ensureBoundaryAddress(): Promise<boolean> {
  * Execute OIDC authentication flow with auto-discovery
  */
 export async function executeOidcAuth(
-  authManager: AuthManager,
+  authManager: IAuthManager,
   options: OidcAuthOptions = {}
 ): Promise<AuthResult> {
-  logger.info('Starting authentication flow');
+  // Show output channel so user can see progress/errors
+  logger.show();
+  logger.info('=== Starting authentication flow ===');
 
   const cli = getBoundaryCLI();
 
@@ -193,10 +207,13 @@ export async function executeOidcAuth(
 
   // If no auth method specified, discover available methods
   if (!authMethodId) {
-    logger.info('Discovering auth methods...');
+    logger.info('Discovering auth methods from Boundary server...');
 
     // Show progress while discovering auth methods
-    let authMethods = await vscode.window.withProgress(
+    let authMethods: BoundaryAuthMethod[] = [];
+    let discoveryError: Error | undefined;
+
+    await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title: 'Discovering sign-in options...',
@@ -204,25 +221,25 @@ export async function executeOidcAuth(
       },
       async () => {
         try {
-          const methods = await cli.listAuthMethods();
-          logger.info(`Discovered ${methods.length} auth methods`);
-          return methods;
+          logger.info('Calling cli.listAuthMethods()...');
+          authMethods = await cli.listAuthMethods();
+          logger.info(`Discovered ${authMethods.length} auth methods: ${authMethods.map(m => m.name).join(', ')}`);
         } catch (err) {
           logger.error('Auth method discovery failed:', err);
-          return [];
+          discoveryError = err instanceof Error ? err : new Error(String(err));
         }
       }
     );
 
     // If discovery failed and TLS is not disabled, offer to disable it
-    if (authMethods.length === 0) {
+    if (authMethods.length === 0 && discoveryError) {
       const config = getConfigurationService();
       const addr = config.get('addr');
       const tlsInsecure = config.get('tlsInsecure');
 
       if (addr?.startsWith('https://') && !tlsInsecure) {
         const retry = await vscode.window.showWarningMessage(
-          'Could not connect to Boundary server. This may be due to a self-signed certificate.',
+          `Could not connect to Boundary server: ${discoveryError.message}. This may be due to a self-signed certificate.`,
           'Skip TLS Verification',
           'Cancel'
         );
@@ -232,31 +249,66 @@ export async function executeOidcAuth(
           logger.info('TLS verification disabled, retrying...');
 
           // Retry discovery
-          authMethods = await cli.listAuthMethods();
+          try {
+            authMethods = await cli.listAuthMethods();
+            discoveryError = undefined;
+          } catch (err) {
+            logger.error('Auth method discovery retry failed:', err);
+            discoveryError = err instanceof Error ? err : new Error(String(err));
+          }
         }
+      } else if (!addr) {
+        // No address configured - this is a different error
+        logger.warn('No Boundary address configured');
+      } else {
+        // TLS already disabled or not HTTPS - show the actual error
+        void vscode.window.showErrorMessage(
+          `Failed to discover auth methods: ${discoveryError.message}`
+        );
       }
     }
 
     if (authMethods.length === 0) {
-      // Fall back to manual entry if discovery still fails
-      logger.warn('No auth methods discovered, falling back to manual entry');
-      return executeManualOidcAuth(authManager);
+      // Discovery failed - try direct OIDC auth (CLI may auto-select primary method)
+      logger.warn('No auth methods discovered, trying direct OIDC auth');
+      return executeDirectOidcAuth(authManager);
     }
 
     // Filter to only OIDC methods for this flow
     const oidcMethods = authMethods.filter(m => m.type === 'oidc');
+    logger.info(`Found ${oidcMethods.length} OIDC methods out of ${authMethods.length} total`);
 
     if (oidcMethods.length === 0) {
-      // No OIDC methods, show all available methods
+      // No OIDC methods - check if password auth is available
+      const passwordMethods = authMethods.filter(m => m.type === 'password');
+      logger.info(`No OIDC methods. Found ${passwordMethods.length} password methods.`);
+
+      // Inform user that OIDC is not configured
+      void vscode.window.showInformationMessage(
+        'OIDC authentication is not configured on this Boundary server. Using password authentication instead.',
+        'OK'
+      );
+
+      if (passwordMethods.length === 1) {
+        // Single password method - go directly to password login
+        logger.info('Single password method available, redirecting to password login...');
+        await vscode.commands.executeCommand('boundary.loginPassword');
+        return { success: true };
+      }
+
+      // Multiple methods or mixed - show picker
+      logger.info('Showing auth method picker...');
       const selected = await showAuthMethodPicker(authMethods);
       if (!selected) {
         return { success: false, error: 'Authentication cancelled' };
       }
 
       if (selected.type === 'password') {
-        // Redirect to password auth
-        void vscode.commands.executeCommand('boundary.loginPassword');
-        return { success: false, error: 'Redirecting to password authentication' };
+        // User selected password auth - invoke password login command
+        logger.info('User selected password auth method, redirecting...');
+        await vscode.commands.executeCommand('boundary.loginPassword');
+        // Return success since the password command will handle the actual auth
+        return { success: true };
       }
 
       authMethodId = selected.id;
@@ -276,9 +328,9 @@ export async function executeOidcAuth(
 
   const credentials: OidcCredentials = { authMethodId };
 
-  // Show a prominent message that browser is opening
-  void vscode.window.showInformationMessage(
-    'A browser window should open for sign-in. If you don\'t see it, check your taskbar.',
+  // Show prominent message about checking browser
+  void vscode.window.showWarningMessage(
+    '🌐 CHECK YOUR BROWSER - A sign-in page should open. Look for a new browser window or tab, it may be behind other windows.',
     'OK'
   );
 
@@ -304,39 +356,25 @@ export async function executeOidcAuth(
 }
 
 /**
- * Fallback: Manual OIDC auth method entry
- * Only used when auth method discovery fails
+ * Direct OIDC auth - just run the CLI and let it handle browser redirect
  */
-async function executeManualOidcAuth(authManager: AuthManager): Promise<AuthResult> {
-  const authMethodId = await vscode.window.showInputBox({
-    prompt: 'Enter OIDC Auth Method ID (contact your administrator)',
-    placeHolder: 'amoidc_...',
-    ignoreFocusOut: true,
-    validateInput: (value) => {
-      if (!value) {
-        return 'Auth Method ID is required';
-      }
-      if (!value.startsWith('amoidc_')) {
-        return 'OIDC auth method ID should start with "amoidc_"';
-      }
-      return undefined;
-    },
-  });
+async function executeDirectOidcAuth(authManager: IAuthManager, authMethodId?: string): Promise<AuthResult> {
+  logger.info('Attempting direct OIDC authentication...');
 
-  if (!authMethodId) {
-    return { success: false, error: 'Authentication cancelled' };
-  }
-
-  const credentials: OidcCredentials = { authMethodId };
+  // Show prominent message about checking browser
+  void vscode.window.showWarningMessage(
+    '🌐 CHECK YOUR BROWSER - A sign-in page should open. Look for a new browser window or tab, it may be behind other windows.',
+    'OK'
+  );
 
   const result = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: 'Opening browser for sign-in...',
+      title: 'Waiting for browser sign-in...',
       cancellable: false,
     },
     async () => {
-      return authManager.login('oidc', credentials);
+      return authManager.login('oidc', authMethodId ? { authMethodId } : undefined);
     }
   );
 

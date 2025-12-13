@@ -1,0 +1,102 @@
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#7C3AED',
+    'primaryTextColor': '#FFFFFF',
+    'primaryBorderColor': '#5B21B6',
+    'secondaryColor': '#10B981',
+    'secondaryTextColor': '#FFFFFF',
+    'secondaryBorderColor': '#047857',
+    'tertiaryColor': '#F3F4F6',
+    'tertiaryTextColor': '#374151',
+    'lineColor': '#6B7280',
+    'textColor': '#1F2937',
+    'mainBkg': '#FFFFFF',
+    'nodeBorder': '#D1D5DB',
+    'clusterBkg': '#F9FAFB',
+    'clusterBorder': '#D1D5DB',
+    'titleColor': '#111827',
+    'edgeLabelBackground': '#FFFFFF',
+    'nodeTextColor': '#1F2937'
+  },
+  'flowchart': {
+    'curve': 'basis',
+    'padding': 30,
+    'nodeSpacing': 60,
+    'rankSpacing': 80,
+    'htmlLabels': true,
+    'useMaxWidth': false
+  }
+}}%%
+
+%% BOUNDARY VS CODE EXTENSION — SIMPLIFIED OVERVIEW
+%% High-level data flow showing the complete user journey
+
+graph TD
+    %% =========================================================================
+    %% USER ENTRY POINT
+    %% =========================================================================
+    USER["<b>User</b><br/><i>Developer in VS Code</i>"]
+
+    %% =========================================================================
+    %% VS CODE ENVIRONMENT
+    %% =========================================================================
+    subgraph VSCODE["<b>VS Code Environment</b>"]
+        direction TB
+        EXT["<b>Boundary Extension</b><br/>Authentication & Target Management<br/>Session Lifecycle Control"]
+        RSSH["<b>Remote SSH Extension</b><br/>Opens remote workspace<br/>via SSH tunnel"]
+    end
+
+    %% =========================================================================
+    %% BOUNDARY INFRASTRUCTURE
+    %% =========================================================================
+    subgraph BOUNDARY["<b>HashiCorp Boundary Infrastructure</b>"]
+        direction TB
+        CLI["<b>Boundary CLI</b><br/>Local proxy on localhost:port<br/>Token management via keyring"]
+        CTRL["<b>Controller</b><br/>API Gateway & Auth<br/>Session Authorization"]
+        WORKER["<b>Worker</b><br/>Session Proxy<br/>Traffic Routing"]
+    end
+
+    %% =========================================================================
+    %% EXTERNAL SYSTEMS
+    %% =========================================================================
+    IDP["<b>Identity Provider</b><br/><i>OIDC / SSO</i><br/>Azure AD, Okta, etc."]
+    TARGET["<b>Target Host</b><br/><i>Protected Resource</i><br/>SSH Server, Database, etc."]
+
+    %% =========================================================================
+    %% USER JOURNEY - AUTHENTICATION
+    %% =========================================================================
+    USER -->|"<b>1. Login</b><br/>Initiates sign-in"| EXT
+    EXT -->|"<b>2. OIDC Auth Request</b><br/>Via Boundary CLI"| CLI
+    CLI -->|"<b>3. Authenticate</b><br/>Request auth methods"| CTRL
+    CTRL <-->|"<b>4. SSO Flow</b><br/>Browser redirect"| IDP
+
+    %% =========================================================================
+    %% USER JOURNEY - TARGET CONNECTION
+    %% =========================================================================
+    USER -->|"<b>5. Select Target</b><br/>From sidebar tree"| EXT
+    EXT -->|"<b>6. Connect</b><br/>boundary connect"| CLI
+    CLI -->|"<b>7. Authorize Session</b><br/>Get credentials"| CTRL
+    CTRL -->|"<b>8. Route Session</b><br/>Assign worker"| WORKER
+
+    %% =========================================================================
+    %% PROXY & SSH TUNNEL
+    %% =========================================================================
+    CLI -->|"<b>9. Local Proxy</b><br/>127.0.0.1:port"| RSSH
+    WORKER ==>|"<b>10. Secure Tunnel</b><br/>Encrypted session"| TARGET
+    RSSH ==>|"<b>11. SSH Session</b><br/>Remote workspace"| TARGET
+
+    %% =========================================================================
+    %% STYLING
+    %% =========================================================================
+    classDef userNode fill:#7C3AED,stroke:#5B21B6,stroke-width:3px,color:#FFFFFF
+    classDef vscodeNode fill:#0EA5E9,stroke:#0369A1,stroke-width:2px,color:#FFFFFF
+    classDef boundaryNode fill:#10B981,stroke:#047857,stroke-width:2px,color:#FFFFFF
+    classDef idpNode fill:#F59E0B,stroke:#B45309,stroke-width:2px,color:#FFFFFF
+    classDef targetNode fill:#EC4899,stroke:#BE185D,stroke-width:2px,color:#FFFFFF
+
+    class USER userNode
+    class EXT,RSSH vscodeNode
+    class CLI,CTRL,WORKER boundaryNode
+    class IDP idpNode
+    class TARGET targetNode

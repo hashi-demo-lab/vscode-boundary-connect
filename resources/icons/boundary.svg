@@ -1,10 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-  <!-- Outer shield boundary -->
-  <path d="M12 2L3 7v6c0 5.25 3.75 9.74 9 11 5.25-1.26 9-5.75 9-11V7l-9-5z"/>
-  <!-- Inner concentric target rings -->
-  <circle cx="12" cy="11" r="5" stroke-width="1.5"/>
-  <circle cx="12" cy="11" r="2" fill="currentColor" stroke="none"/>
-  <!-- Connection node indicator -->
-  <path d="M12 16v4" stroke-width="2"/>
-  <circle cx="12" cy="21" r="1" fill="currentColor" stroke="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="46.3 0 419.3 512" fill="currentColor">
+  <!-- HashiCorp Boundary Logo - Monochrome -->
+  <path d="M112.9 512v-39.5h82.2v-25h-39.5V408H344l-87.5-152 87.4-151.9H150.4v210.2H46.3V0h356.9l59.3 103-86.4 153 89.5 155.1L407.4 512z"/>
+  <path d="M128.5 407.9H89v39.5h39.5zm-41.6 63.5H47.3V511h39.5c.1 0 .1-39.6.1-39.6"/>
 </svg>

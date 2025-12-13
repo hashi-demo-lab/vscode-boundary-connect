@@ -65,7 +65,15 @@
       "Bash(boundary --help)",
       "Bash(npm run compile:*)",
       "Bash(npm run package:*)",
-      "Bash(code --install-extension:*)"
+      "Bash(code --install-extension:*)",
+      "Bash(node -e:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run lint:*)",
+      "Skill(frontend-design)",
+      "Bash(boundary targets list:*)",
+      "WebSearch",
+      "WebFetch(domain:code.visualstudio.com)",
+      "Bash(npm install:*)"
     ],
     "deny": [
       "Write(.gitignore)",

@@ -8,7 +8,7 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryScope, BoundaryTarget } from '../types';
+import { BoundaryScope, BoundaryTarget, IBoundaryCLI, ITargetService } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
 
@@ -42,7 +42,7 @@ class Mutex {
   }
 }
 
-export class TargetService implements vscode.Disposable {
+export class TargetService implements ITargetService {
   private targetsCache: Map<string, BoundaryTarget[]> = new Map();
   private scopesCache: BoundaryScope[] = [];
   private lastFetchTime: number = 0;
@@ -57,7 +57,15 @@ export class TargetService implements vscode.Disposable {
   private readonly _onTargetsChanged = new vscode.EventEmitter<void>();
   readonly onTargetsChanged = this._onTargetsChanged.event;
 
-  constructor() {}
+  private readonly cli: IBoundaryCLI;
+
+  /**
+   * Create a new TargetService
+   * @param cli - Boundary CLI (optional for backward compatibility)
+   */
+  constructor(cli?: IBoundaryCLI) {
+    this.cli = cli ?? getBoundaryCLI();
+  }
 
   /**
    * Get all scopes
@@ -74,10 +82,8 @@ export class TargetService implements vscode.Disposable {
         return [...this.scopesCache];
       }
 
-      const cli = getBoundaryCLI();
-
       // Get global scopes (orgs)
-      const orgs = await cli.listScopes('global');
+      const orgs = await this.cli.listScopes('global');
 
       // For each org, get projects
       const allScopes: BoundaryScope[] = [];
@@ -85,7 +91,7 @@ export class TargetService implements vscode.Disposable {
         allScopes.push(org);
 
         try {
-          const projects = await cli.listScopes(org.id);
+          const projects = await this.cli.listScopes(org.id);
           allScopes.push(...projects);
         } catch (error) {
           logger.warn(`Failed to fetch projects for org ${org.id}:`, error);
@@ -147,10 +153,9 @@ export class TargetService implements vscode.Disposable {
       }
 
       logger.debug('Fetching targets from Boundary...');
-      const cli = getBoundaryCLI();
 
       // List all targets recursively from global scope
-      const targets = await cli.listTargets(undefined, true);
+      const targets = await this.cli.listTargets(undefined, true);
 
       // Filter to only targets user can connect to
       const connectableTargets = targets.filter(t =>
@@ -220,8 +225,7 @@ export class TargetService implements vscode.Disposable {
         }
       }
 
-      const cli = getBoundaryCLI();
-      const targets = await cli.listTargets(scopeId, false);
+      const targets = await this.cli.listTargets(scopeId, false);
 
       // Filter to only targets user can connect to
       const connectableTargets = targets.filter(t =>

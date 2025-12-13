@@ -3,31 +3,50 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget, BrokeredCredential, IConnectionManager, Session } from '../types';
+import { BoundaryTarget, BrokeredCredential, IBoundaryCLI, IConnectionManager, Session } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
 import { logger } from '../utils/logger';
 import { createSession, terminateSession } from './session';
-import { triggerRemoteSSH } from './remoteSSH';
+import { triggerRemoteSSH, removeBoundarySSHConfigEntry } from './remoteSSH';
+
+/** Storage key prefix for persisted usernames */
+const USERNAME_STORAGE_PREFIX = 'boundary.username.';
 
 export class ConnectionManager implements IConnectionManager {
   private readonly _onSessionsChanged = new vscode.EventEmitter<Session[]>();
   readonly onSessionsChanged = this._onSessionsChanged.event;
 
   private sessions: Map<string, Session> = new Map();
+  private globalState: vscode.Memento | undefined;
+  private readonly cli: IBoundaryCLI;
 
-  constructor() {}
+  /**
+   * Create a new ConnectionManager
+   * @param cli - Boundary CLI (optional for backward compatibility)
+   * @param globalState - VS Code global state for persistence (optional)
+   */
+  constructor(cli?: IBoundaryCLI, globalState?: vscode.Memento) {
+    this.cli = cli ?? getBoundaryCLI();
+    this.globalState = globalState;
+  }
+
+  /**
+   * Set the global state for persisting usernames across sessions
+   * Called during extension activation (for backward compatibility)
+   */
+  setGlobalState(globalState: vscode.Memento): void {
+    this.globalState = globalState;
+  }
 
   async connect(target: BoundaryTarget): Promise<Session> {
     logger.info(`Connecting to target: ${target.name} (${target.id})`);
-
-    const cli = getBoundaryCLI();
 
     // First, try to get session authorization to check for brokered credentials
     let brokeredCredentials: BrokeredCredential[] | undefined;
     let userName: string | undefined;
 
     try {
-      const authz = await cli.authorizeSession(target.id);
+      const authz = await this.cli.authorizeSession(target.id);
       if (authz.credentials && authz.credentials.length > 0) {
         brokeredCredentials = authz.credentials;
         // Use username from brokered credentials if available
@@ -52,7 +71,7 @@ export class ConnectionManager implements IConnectionManager {
     }
 
     // Spawn boundary connect (TCP proxy mode)
-    const connection = await cli.connect(target.id);
+    const connection = await this.cli.connect(target.id);
 
     // Create session
     const session = createSession(target, connection.process, connection.localPort);
@@ -66,6 +85,9 @@ export class ConnectionManager implements IConnectionManager {
       session.status = 'terminated';
       this.sessions.delete(session.id);
       this._onSessionsChanged.fire(this.getActiveSessions());
+
+      // Clean up SSH config entry for this session
+      void removeBoundarySSHConfigEntry(session.localPort, session.targetName);
     });
 
     // Notify listeners
@@ -135,15 +157,25 @@ export class ConnectionManager implements IConnectionManager {
     return userName;
   }
 
-  // Simple in-memory username cache (could be persisted later)
-  private usernameCache: Map<string, string> = new Map();
-
+  /**
+   * Get saved username from persistent storage
+   */
   private getSavedUsername(targetId: string): string | undefined {
-    return this.usernameCache.get(targetId);
+    if (!this.globalState) {
+      return undefined;
+    }
+    return this.globalState.get<string>(`${USERNAME_STORAGE_PREFIX}${targetId}`);
   }
 
+  /**
+   * Save username to persistent storage for future sessions
+   */
   private saveUsername(targetId: string, userName: string): void {
-    this.usernameCache.set(targetId, userName);
+    if (!this.globalState) {
+      logger.warn('Cannot persist username: globalState not initialized');
+      return;
+    }
+    void this.globalState.update(`${USERNAME_STORAGE_PREFIX}${targetId}`, userName);
   }
 
   async disconnect(sessionId: string): Promise<void> {

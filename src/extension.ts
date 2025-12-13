@@ -12,25 +12,74 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget } from './types';
+import { BoundaryTarget, IAuthManager, ITargetProvider } from './types';
 import { AuthManager, createAuthManager } from './auth/authManager';
-import { disposeAuthStateManager } from './auth/authState';
+import { createAuthStateManager, disposeAuthStateManager } from './auth/authState';
 import { executePasswordAuth } from './auth/passwordAuth';
 import { executeOidcAuth } from './auth/oidcAuth';
-import { getBoundaryCLI, disposeBoundaryCLI } from './boundary/cli';
-import { createTargetProvider, TargetProvider } from './targets/targetProvider';
-import { disposeTargetService } from './targets/targetService';
-import { getConnectionManager, disposeConnectionManager } from './connection/connectionManager';
-import { getStatusBarManager, disposeStatusBarManager } from './ui/statusBar';
+import { BoundaryCLI, disposeBoundaryCLI } from './boundary/cli';
+import { TargetProvider } from './targets/targetProvider';
+import { TargetService, disposeTargetService } from './targets/targetService';
+import { ConnectionManager, disposeConnectionManager } from './connection/connectionManager';
+import { cleanupBoundarySSHConfigEntries } from './connection/remoteSSH';
+import { StatusBarManager, disposeStatusBarManager } from './ui/statusBar';
 import { showAuthMethodPicker, showTargetPicker, showSessionsList } from './ui/quickPick';
 import { createSessionsPanelProvider, disposeSessionsPanelProvider } from './ui/sessionsPanel';
 import { getTargetDecorationProvider, disposeTargetDecorationProvider } from './ui/decorationProvider';
-import { getConfigurationService, disposeConfigurationService } from './utils/config';
+import { ConfigurationService, disposeConfigurationService } from './utils/config';
 import { Logger, LogLevel, logger } from './utils/logger';
 import { BoundaryError, BoundaryErrorCode } from './utils/errors';
+import {
+  createServiceContainer,
+  disposeServiceContainer,
+  IServiceContainer,
+  ServiceFactories,
+  setGlobalContainer,
+} from './services/container';
 
-let authManager: AuthManager;
-let targetProvider: TargetProvider;
+let authManager: IAuthManager;
+let targetProvider: ITargetProvider;
+let serviceContainer: IServiceContainer;
+
+/**
+ * Create the service factory functions for dependency injection
+ */
+function createServiceFactories(): ServiceFactories {
+  return {
+    config: () => new ConfigurationService(),
+    cli: (config) => new BoundaryCLI(config),
+    authState: () => createAuthStateManager(),
+    auth: (context, cli, authState) => createAuthManager(context, cli, authState),
+    targets: (cli) => new TargetService(cli),
+    connections: (cli, context) => {
+      const manager = new ConnectionManager(cli, context.globalState);
+      return manager;
+    },
+    statusBar: () => new StatusBarManager(),
+  };
+}
+
+/**
+ * Update welcome view context values based on current state.
+ * This enables smart welcome views that guide users through setup.
+ */
+async function updateWelcomeViewContext(container: IServiceContainer): Promise<boolean> {
+  const cli = container.cli;
+  const config = container.config;
+
+  // Check CLI installation
+  const cliInstalled = await cli.checkInstalled();
+  await vscode.commands.executeCommand('setContext', 'boundary.cliInstalled', cliInstalled);
+
+  // Check if address is configured (setting or env var)
+  const addrSetting = config.get('addr');
+  const addrEnvVar = process.env.BOUNDARY_ADDR;
+  const addrConfigured = !!(addrSetting || addrEnvVar);
+  await vscode.commands.executeCommand('setContext', 'boundary.addrConfigured', addrConfigured);
+
+  logger.debug('Welcome view context updated:', { cliInstalled, addrConfigured });
+  return cliInstalled;
+}
 
 /**
  * Extension activation
@@ -38,55 +87,55 @@ let targetProvider: TargetProvider;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   logger.info('Activating Boundary extension');
 
+  // Create service container with all dependencies
+  serviceContainer = createServiceContainer(context, createServiceFactories());
+  setGlobalContainer(serviceContainer);
+
   // Initialize configuration
-  const config = getConfigurationService();
+  const config = serviceContainer.config;
   const logLevel = (process.env.BOUNDARY_LOG_LEVEL || config.get('logLevel')) as LogLevel;
   logger.setLogLevel(logLevel);
   logger.debug('Extension activation started with log level:', logLevel);
 
-  // Listen for config changes
+  // Listen for config changes (log level + welcome view context)
   context.subscriptions.push(
-    config.onConfigurationChanged(cfg => {
+    config.onConfigurationChanged(async cfg => {
       logger.setLogLevel(cfg.logLevel);
+      // Re-evaluate welcome view context when config changes
+      await updateWelcomeViewContext(serviceContainer);
     })
   );
 
-  // Check if Boundary CLI is available
-  const cli = getBoundaryCLI();
-  const cliInstalled = await cli.checkInstalled();
+  // Set welcome view context values (CLI installed, address configured)
+  // This enables smart welcome views that guide users through setup
+  const cliInstalled = await updateWelcomeViewContext(serviceContainer);
 
-  if (!cliInstalled) {
-    logger.error('Boundary CLI not found');
-    const action = await vscode.window.showWarningMessage(
-      'Boundary CLI not found. Some features may not work.',
-      'Install',
-      'Configure Path'
-    );
-
-    if (action === 'Install') {
-      void vscode.env.openExternal(
-        vscode.Uri.parse('https://developer.hashicorp.com/boundary/downloads')
-      );
-    } else if (action === 'Configure Path') {
-      void vscode.commands.executeCommand(
-        'workbench.action.openSettings',
-        'boundary.cliPath'
-      );
-    }
-  } else {
-    const version = await cli.getVersion();
+  if (cliInstalled) {
+    const version = await serviceContainer.cli.getVersion();
     logger.info('Boundary CLI version:', version || 'unknown');
-    logger.debug('Boundary CLI is installed and available');
+  } else {
+    logger.warn('Boundary CLI not found - welcome view will guide installation');
   }
 
-  // Initialize auth manager (uses AuthStateManager internally)
-  authManager = createAuthManager(context);
+  // Initialize auth manager from container
+  authManager = serviceContainer.auth;
   context.subscriptions.push(authManager);
 
-  // Initialize target provider
-  targetProvider = createTargetProvider();
+  // Initialize auth state BEFORE creating TargetProvider to avoid race condition
+  // TargetProvider subscribes to auth state changes, so we need auth state resolved first
+  await (authManager as AuthManager).initialize();
+  logger.debug('Auth initialization complete, state:', (authManager as AuthManager).state);
+
+  // Initialize target provider with injected dependencies (after auth init to prevent race condition)
+  targetProvider = new TargetProvider(serviceContainer.targets, serviceContainer.authState);
   targetProvider.setAuthManager(authManager); // Wire up for token expiration handling
+  targetProvider.initialize(); // Set up event subscriptions
   context.subscriptions.push(targetProvider);
+
+  // Auto-fetch targets if already authenticated (since state change fired before subscription)
+  if ((authManager as AuthManager).state === 'authenticated') {
+    targetProvider.refresh();
+  }
 
   // Register TreeView
   const treeView = vscode.window.createTreeView('boundary.targets', {
@@ -110,9 +159,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerFileDecorationProvider(decorationProvider)
   );
 
-  // Wire up connection manager to status bar
-  const connectionManager = getConnectionManager();
-  const statusBar = getStatusBarManager();
+  // Wire up connection manager (from container) to status bar
+  const connectionManager = serviceContainer.connections;
+  const statusBar = serviceContainer.statusBar;
 
   context.subscriptions.push(
     connectionManager.onSessionsChanged(sessions => {
@@ -124,10 +173,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   logger.debug('Registering commands...');
   registerCommands(context);
   logger.debug('Commands registered successfully');
-
-  // Initialize auth state (checks CLI keyring for existing token)
-  await authManager.initialize();
-  logger.debug('Auth initialization complete, state:', authManager.state);
 
   logger.info('Boundary extension activated');
 }
@@ -212,10 +257,17 @@ function registerCommands(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Connect to specific target (from TreeView)
+  // Connect to specific target (from TreeView context menu)
   context.subscriptions.push(
-    vscode.commands.registerCommand('boundary.connectTarget', async (target: BoundaryTarget) => {
+    vscode.commands.registerCommand('boundary.connectTarget', async (item: unknown) => {
+      if (!item) {
+        return;
+      }
+      // Context menu passes TargetTreeItemData, extract the target
+      const treeItemData = item as { target?: BoundaryTarget };
+      const target = treeItemData.target;
       if (!target) {
+        logger.warn('connectTarget called without valid target data');
         return;
       }
       await connectToTarget(target);
@@ -232,7 +284,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
   // Disconnect all command
   context.subscriptions.push(
     vscode.commands.registerCommand('boundary.disconnectAll', async () => {
-      const connectionManager = getConnectionManager();
+      const connectionManager = serviceContainer.connections;
       const count = connectionManager.getSessionCount();
 
       if (count === 0) {
@@ -265,8 +317,8 @@ function registerCommands(context: vscode.ExtensionContext): void {
  * Connect to a target
  */
 async function connectToTarget(target: BoundaryTarget): Promise<void> {
-  const statusBar = getStatusBarManager();
-  const connectionManager = getConnectionManager();
+  const statusBar = serviceContainer.statusBar;
+  const connectionManager = serviceContainer.connections;
 
   statusBar.showConnecting(target.name);
 
@@ -314,11 +366,21 @@ async function connectToTarget(target: BoundaryTarget): Promise<void> {
 export function deactivate(): void {
   logger.info('Deactivating Boundary extension');
 
-  // Dispose all singletons in reverse order of creation
-  disposeConnectionManager();
-  disposeStatusBarManager();
+  // Clean up any remaining SSH config entries (fire and forget)
+  void cleanupBoundarySSHConfigEntries();
+
+  // Dispose service container (handles all DI-managed services)
+  if (serviceContainer) {
+    disposeServiceContainer(serviceContainer);
+  }
+
+  // Dispose remaining singletons not managed by container
   disposeSessionsPanelProvider();
   disposeTargetDecorationProvider();
+
+  // Dispose legacy singletons (for backward compatibility during migration)
+  disposeConnectionManager();
+  disposeStatusBarManager();
   disposeTargetService();
   disposeBoundaryCLI();
   disposeAuthStateManager();
