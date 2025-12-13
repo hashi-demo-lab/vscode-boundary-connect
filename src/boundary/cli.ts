@@ -226,14 +226,30 @@ export class BoundaryCLI implements IBoundaryCLI {
         }
         return { success: false, error: String(error) };
       }
-    } else if (method === 'oidc' && credentials) {
-      args.push('-auth-method-id', credentials.authMethodId);
+    } else if (method === 'oidc') {
+      // Only add auth method ID if provided (some servers auto-select primary)
+      const oidcCreds = credentials as { authMethodId?: string } | undefined;
+      if (oidcCreds?.authMethodId) {
+        args.push('-auth-method-id', oidcCreds.authMethodId);
+      }
     }
 
+    // OIDC auth needs longer timeout (5 min) since it waits for browser interaction
+    const timeout = method === 'oidc' ? 300000 : 30000;
+
+    const env = this.getCliEnv();
+    logger.info(`Executing authenticate: ${method}`);
+    logger.info(`CLI args: ${args.join(' ')}`);
+    logger.info(`BOUNDARY_ADDR: ${env.BOUNDARY_ADDR || '(not set)'}`);
+    logger.info(`BOUNDARY_TLS_INSECURE: ${env.BOUNDARY_TLS_INSECURE || '(not set)'}`);
+
     try {
-      const result = await this.execute(args);
+      const result = await this.execute(args, timeout);
+      logger.info('Auth command completed successfully');
+      logger.debug('Auth result stdout:', result.stdout.substring(0, 500));
       return parseAuthResponse(result.stdout);
     } catch (error) {
+      logger.error('Auth error:', error);
       if (error instanceof BoundaryError) {
         return { success: false, error: error.message };
       }
@@ -291,9 +307,13 @@ export class BoundaryCLI implements IBoundaryCLI {
           };
         }
 
+        // Try to parse JSON error from stderr and classify appropriately
+        const errorSource = execError.stderr || execError.message;
+        const errorInfo = this.extractErrorInfo(errorSource);
+
         throw new BoundaryError(
-          execError.stderr || execError.message,
-          BoundaryErrorCode.CLI_EXECUTION_FAILED,
+          errorInfo.message,
+          errorInfo.code,
           error
         );
       }
@@ -336,9 +356,11 @@ export class BoundaryCLI implements IBoundaryCLI {
       args.push('-scope-id', 'global');
     }
 
-    // Let errors propagate so callers can handle appropriately
-    // This allows distinguishing "no auth methods" from "failed to fetch"
-    const result = await this.execute(args);
+    const env = this.getCliEnv();
+    logger.info(`listAuthMethods: BOUNDARY_ADDR=${env.BOUNDARY_ADDR || '(not set)'}`);
+
+    // Use shorter timeout for discovery (10s) - if server is unreachable, fail fast
+    const result = await this.execute(args, 10000);
     return parseAuthMethodsResponse(result.stdout);
   }
 
@@ -494,6 +516,88 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   /**
+   * Extract error info from CLI output, including appropriate error code
+   * Handles JSON API error responses from Boundary
+   */
+  private extractErrorInfo(errorOutput: string): { message: string; code: BoundaryErrorCode } {
+    if (!errorOutput) {
+      return { message: 'Unknown error', code: BoundaryErrorCode.CLI_EXECUTION_FAILED };
+    }
+
+    const trimmed = errorOutput.trim();
+    let message = trimmed;
+    let code = BoundaryErrorCode.CLI_EXECUTION_FAILED;
+
+    // Check if it's JSON (Boundary API error response)
+    if (trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed) as {
+          api_error?: { message?: string };
+          error?: { message?: string; context?: string } | string;
+          context?: string;
+          status_code?: number;
+        };
+
+        // Extract meaningful message from API error structure
+        if (parsed.api_error?.message) {
+          message = parsed.api_error.message;
+        } else if (typeof parsed.error === 'object' && parsed.error?.message) {
+          message = parsed.error.message;
+        } else if (parsed.context) {
+          message = parsed.context;
+        } else if (typeof parsed.error === 'string') {
+          message = parsed.error;
+        }
+
+        // Classify the error code based on the parsed response
+        code = this.classifyErrorMessage(message, parsed.status_code);
+      } catch {
+        // Not valid JSON, fall through
+      }
+    } else {
+      // Plain text error - classify based on message
+      code = this.classifyErrorMessage(message);
+    }
+
+    // Truncate if too long
+    if (message.length > 200) {
+      message = message.substring(0, 197) + '...';
+    }
+
+    return { message, code };
+  }
+
+  /**
+   * Classify error message into appropriate BoundaryErrorCode
+   */
+  private classifyErrorMessage(message: string, statusCode?: number): BoundaryErrorCode {
+    const lowerMessage = message.toLowerCase();
+
+    // Check for auth-related errors
+    if (statusCode === 401 || statusCode === 403 ||
+        lowerMessage.includes('unauthorized') ||
+        lowerMessage.includes('unauthenticated') ||
+        lowerMessage.includes('forbidden') ||
+        lowerMessage.includes('permission denied')) {
+      return BoundaryErrorCode.AUTH_FAILED;
+    }
+
+    // Check for token expiration
+    if (lowerMessage.includes('expired') ||
+        lowerMessage.includes('session has ended') ||
+        lowerMessage.includes('token')) {
+      return BoundaryErrorCode.TOKEN_EXPIRED;
+    }
+
+    // Check for not found
+    if (statusCode === 404 || lowerMessage.includes('not found')) {
+      return BoundaryErrorCode.TARGET_NOT_FOUND;
+    }
+
+    return BoundaryErrorCode.CLI_EXECUTION_FAILED;
+  }
+
+  /**
    * Execute a Boundary CLI command
    */
   private async execute(args: string[], timeoutMs = 30000): Promise<CLIExecutionResult> {
@@ -517,8 +621,13 @@ export class BoundaryCLI implements IBoundaryCLI {
       };
     } catch (error: unknown) {
       // execFile throws on non-zero exit
+      logger.error('CLI execution error:', error);
+
       if (error && typeof error === 'object' && 'code' in error) {
         const execError = error as { code: number | string; stdout?: string; stderr?: string; message: string };
+        logger.error(`CLI exit code: ${execError.code}`);
+        logger.error(`CLI stdout: ${execError.stdout?.substring(0, 500) || '(empty)'}`);
+        logger.error(`CLI stderr: ${execError.stderr?.substring(0, 500) || '(empty)'}`);
 
         // Check if it's a "command not found" error
         if (execError.code === 127 || execError.code === 'ENOENT' ||
@@ -538,9 +647,13 @@ export class BoundaryCLI implements IBoundaryCLI {
           };
         }
 
+        // Try to parse JSON error from stderr and classify appropriately
+        const errorSource = execError.stderr || execError.message;
+        const errorInfo = this.extractErrorInfo(errorSource);
+
         throw new BoundaryError(
-          execError.stderr || execError.message,
-          BoundaryErrorCode.CLI_EXECUTION_FAILED,
+          errorInfo.message,
+          errorInfo.code,
           error
         );
       }

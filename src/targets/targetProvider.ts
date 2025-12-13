@@ -14,6 +14,7 @@ import { getTargetService } from './targetService';
 import { logger } from '../utils/logger';
 import { isAuthRequired } from '../utils/errors';
 import { AuthState, getAuthStateManager } from '../auth/authState';
+import { getConfigurationService } from '../utils/config';
 
 export class TargetProvider implements ITargetProvider {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TargetTreeItemData | undefined | null | void>();
@@ -77,14 +78,83 @@ export class TargetProvider implements ITargetProvider {
   }
 
   /**
+   * Extract a user-friendly error message from an error
+   * Handles BoundaryError with getUserMessage() and parses JSON error responses
+   */
+  private extractUserFriendlyError(err: unknown): string {
+    // Import BoundaryError dynamically to avoid circular deps at module level
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const { BoundaryError } = require('../utils/errors') as { BoundaryError: typeof import('../utils/errors').BoundaryError };
+
+    // Use BoundaryError's getUserMessage() if available
+    if (err instanceof BoundaryError) {
+      return err.getUserMessage();
+    }
+
+    if (err instanceof Error) {
+      const message = err.message;
+
+      // Check if message is JSON (raw API error response)
+      if (message.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(message) as {
+            api_error?: { message?: string };
+            error?: { message?: string };
+            context?: string;
+          };
+          // Extract meaningful parts from API error response
+          if (parsed.api_error?.message) {
+            return parsed.api_error.message;
+          }
+          if (parsed.error?.message) {
+            return parsed.error.message;
+          }
+          if (parsed.context) {
+            return parsed.context;
+          }
+        } catch {
+          // Not valid JSON, use message as-is but truncate if too long
+        }
+      }
+
+      // Truncate very long messages for display
+      if (message.length > 100) {
+        return message.substring(0, 97) + '...';
+      }
+
+      return message;
+    }
+
+    return 'Failed to fetch targets';
+  }
+
+  /**
+   * Check if Boundary address is configured (setting or env var)
+   */
+  private isAddressConfigured(): boolean {
+    const config = getConfigurationService();
+    const addrSetting = config.get('addr');
+    const addrEnvVar = process.env.BOUNDARY_ADDR;
+    return !!(addrSetting || addrEnvVar);
+  }
+
+  /**
    * Handle auth state changes from the state manager
    */
   private handleAuthStateChange(state: AuthState): void {
     logger.debug(`TargetProvider: auth state changed to ${state}`);
 
     if (state === 'authenticated') {
-      // Fetch targets when authenticated
-      void this.fetchTargets();
+      // Only fetch targets if address is configured
+      if (this.isAddressConfigured()) {
+        void this.fetchTargets();
+      } else {
+        logger.warn('TargetProvider: skipping target fetch - address not configured');
+        // Clear and show welcome view
+        this.targets = [];
+        this.error = undefined;
+        this._onDidChangeTreeData.fire();
+      }
     } else {
       // Clear targets when not authenticated
       this.targets = [];
@@ -101,7 +171,8 @@ export class TargetProvider implements ITargetProvider {
   }
 
   refresh(): void {
-    if (this.isAuthenticated) {
+    // Only fetch if address is configured and authenticated
+    if (this.isAddressConfigured() && this.isAuthenticated) {
       void this.fetchTargets();
     } else {
       this._onDidChangeTreeData.fire();
@@ -141,7 +212,8 @@ export class TargetProvider implements ITargetProvider {
           }
         });
       } else {
-        this.error = err instanceof Error ? err.message : 'Failed to fetch targets';
+        // Use user-friendly message from BoundaryError if available
+        this.error = this.extractUserFriendlyError(err);
       }
     } finally {
       this.loading = false;
@@ -156,6 +228,11 @@ export class TargetProvider implements ITargetProvider {
   getChildren(element?: TargetTreeItemData): TargetTreeItemData[] {
     // Root level
     if (!element) {
+      // Address not configured - return empty to show welcome view
+      if (!this.isAddressConfigured()) {
+        return [];
+      }
+
       // Not authenticated - return empty to show welcome view
       if (!this.isAuthenticated) {
         return [];

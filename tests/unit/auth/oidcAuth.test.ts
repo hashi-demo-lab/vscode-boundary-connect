@@ -12,7 +12,7 @@ jest.mock('vscode', () => ({
     showWarningMessage: jest.fn(),
     showInformationMessage: jest.fn(),
     showErrorMessage: jest.fn(),
-    withProgress: jest.fn((options, task) => task({ report: jest.fn() })),
+    withProgress: jest.fn(async (options, task) => await task({ report: jest.fn() })),
   },
   commands: {
     executeCommand: jest.fn(),
@@ -57,6 +57,7 @@ jest.mock('../../../src/utils/logger', () => ({
     warn: jest.fn(),
     error: jest.fn(),
     debug: jest.fn(),
+    show: jest.fn(),
   },
 }));
 
@@ -176,25 +177,21 @@ describe('OIDC Auth Flow', () => {
       expect(mockAuthManager.login).not.toHaveBeenCalled();
     });
 
-    it('should handle empty auth methods by falling back to manual entry', async () => {
-      const vscode = require('vscode');
+    it('should handle empty auth methods by falling back to direct OIDC auth', async () => {
       mockListAuthMethods.mockResolvedValue([]);
 
-      // Mock warning message to not retry
-      vscode.window.showWarningMessage.mockResolvedValue('Cancel');
-
-      // Mock input box for manual entry (user cancels)
-      vscode.window.showInputBox.mockResolvedValue(undefined);
-
+      // When no auth methods discovered, executeDirectOidcAuth is called
+      // which will try to login with no auth method (CLI will use primary)
       const mockAuthManager = {
-        login: jest.fn(),
+        login: jest.fn().mockResolvedValue({ success: true, token: 'test-token' }),
       };
 
       const { executeOidcAuth } = require('../../../src/auth/oidcAuth');
       const result = await executeOidcAuth(mockAuthManager);
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('cancelled');
+      // Should fall back to direct OIDC auth (no auth method ID)
+      expect(mockAuthManager.login).toHaveBeenCalledWith('oidc', undefined);
+      expect(result.success).toBe(true);
     });
 
     it('should handle cancelled picker selection', async () => {

@@ -3,8 +3,7 @@
  */
 
 import * as vscode from 'vscode';
-import { AuthResult, PasswordCredentials } from '../types';
-import { AuthManager } from './authManager';
+import { AuthResult, IAuthManager, PasswordCredentials } from '../types';
 import { logger } from '../utils/logger';
 
 export interface PasswordAuthOptions {
@@ -15,7 +14,7 @@ export interface PasswordAuthOptions {
  * Execute password authentication flow with user input
  */
 export async function executePasswordAuth(
-  authManager: AuthManager,
+  authManager: IAuthManager,
   options: PasswordAuthOptions = {}
 ): Promise<AuthResult> {
   logger.info('Starting password authentication flow');

@@ -195,10 +195,11 @@ export interface BoundaryApiResponse<T = unknown> {
   context?: string;
   item?: T;
   items?: T[];
+  // Error can be structured object or simple string
   error?: {
     kind: string;
     message: string;
-  };
+  } | string;
   // Some API responses use api_error instead of error
   api_error?: {
     kind: string;
@@ -213,15 +214,27 @@ export function isErrorResponse(response: BoundaryApiResponse): boolean {
 
 export function getErrorMessage(response: BoundaryApiResponse): string {
   const apiError = response.api_error || response.error;
-  if (apiError?.message) {
+
+  // Handle structured error object: { kind: string, message: string }
+  if (apiError && typeof apiError === 'object' && 'message' in apiError) {
     return apiError.message;
   }
+
+  // Handle string error (e.g., {"error": "Error trying to list targets: ..."})
+  if (typeof apiError === 'string') {
+    return apiError;
+  }
+
+  // Handle context field
   if (response.context) {
     return response.context;
   }
+
+  // Handle status field
   if (response.status) {
     return response.status;
   }
+
   return `Request failed with status ${response.status_code ?? 'unknown'}`;
 }
 
@@ -294,8 +307,11 @@ export function parseAuthResponse(output: string): AuthResult {
 
 /**
  * Parse auth methods list response
+ *
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
  */
-interface AuthMethodResponseItem {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _AuthMethodResponseItem {
   id: string;
   scope_id: string;
   name: string;
@@ -344,8 +360,11 @@ function getDefaultAuthMethodName(type: string): string {
 
 /**
  * Parse scope list response
+ *
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
  */
-interface ScopeResponseItem {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _ScopeResponseItem {
   id: string;
   scope_id: string;
   name: string;
@@ -372,8 +391,11 @@ export function parseScopesResponse(output: string): BoundaryScope[] {
 
 /**
  * Parse target list response
+ *
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
  */
-interface TargetResponseItem {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _TargetResponseItem {
   id: string;
   scope_id: string;
   scope: {
@@ -449,7 +471,11 @@ interface BrokeredCredentialItem {
   credential: CredentialItem;
 }
 
-interface SessionAuthResponseItem {
+/**
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _SessionAuthResponseItem {
   session_id: string;
   target_id: string;
   authorization_token: string;
@@ -528,13 +554,41 @@ export function extractVersion(output: string): string | undefined {
 }
 
 /**
+ * Helper to get error kind from potentially string or object error
+ */
+function getErrorKind(apiError: BoundaryApiResponse['error'] | BoundaryApiResponse['api_error']): string | undefined {
+  if (apiError && typeof apiError === 'object' && 'kind' in apiError) {
+    return apiError.kind;
+  }
+  return undefined;
+}
+
+/**
+ * Helper to get error message text from potentially string or object error
+ */
+function getErrorText(apiError: BoundaryApiResponse['error'] | BoundaryApiResponse['api_error']): string {
+  if (typeof apiError === 'string') {
+    return apiError.toLowerCase();
+  }
+  if (apiError && typeof apiError === 'object' && 'message' in apiError) {
+    return apiError.message.toLowerCase();
+  }
+  return '';
+}
+
+/**
  * Check if response indicates authentication is required (401 Unauthorized)
  */
 export function isAuthRequired(response: BoundaryApiResponse): boolean {
   const apiError = response.api_error || response.error;
+  const kind = getErrorKind(apiError);
+  const text = getErrorText(apiError);
+
   return response.status_code === 401 ||
-         apiError?.kind === 'Unauthorized' ||
-         apiError?.kind === 'Unauthenticated';
+         kind === 'Unauthorized' ||
+         kind === 'Unauthenticated' ||
+         text.includes('unauthorized') ||
+         text.includes('unauthenticated');
 }
 
 /**
@@ -542,9 +596,14 @@ export function isAuthRequired(response: BoundaryApiResponse): boolean {
  */
 export function isPermissionDenied(response: BoundaryApiResponse): boolean {
   const apiError = response.api_error || response.error;
+  const kind = getErrorKind(apiError);
+  const text = getErrorText(apiError);
+
   return response.status_code === 403 ||
-         apiError?.kind === 'Forbidden' ||
-         apiError?.kind === 'PermissionDenied';
+         kind === 'Forbidden' ||
+         kind === 'PermissionDenied' ||
+         text.includes('permission denied') ||
+         text.includes('forbidden');
 }
 
 /**
@@ -552,15 +611,16 @@ export function isPermissionDenied(response: BoundaryApiResponse): boolean {
  */
 export function isTokenExpired(response: BoundaryApiResponse): boolean {
   const apiError = response.api_error || response.error;
+  const kind = getErrorKind(apiError);
+  const text = getErrorText(apiError);
+
   // Token expired can be indicated by:
-  // - 401 with specific message about expiration
-  // - SessionExpired kind
-  if (apiError?.kind === 'SessionExpired' || apiError?.kind === 'TokenExpired') {
-    return true;
-  }
-  // Check message for expiration indicators (only as fallback for structured data)
-  const message = apiError?.message?.toLowerCase() || '';
-  return message.includes('expired') || message.includes('expir');
+  // - SessionExpired/TokenExpired kind
+  // - Message containing "expired"
+  return kind === 'SessionExpired' ||
+         kind === 'TokenExpired' ||
+         text.includes('expired') ||
+         text.includes('session has ended');
 }
 
 /**
