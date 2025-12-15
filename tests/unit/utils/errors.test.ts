@@ -142,18 +142,19 @@ describe('Error Utilities', () => {
     });
 
     describe('by status code in details', () => {
-      it('should return true for 401 status', () => {
+      it('should return true for 401 status (authentication required)', () => {
         const error = new BoundaryError('test', BoundaryErrorCode.CLI_EXECUTION_FAILED, {
           status_code: 401,
         });
         expect(isAuthRequired(error)).toBe(true);
       });
 
-      it('should return true for 403 status', () => {
+      it('should return false for 403 status (permission denied, not auth issue)', () => {
+        // 403 means authenticated but not authorized - re-auth won't help
         const error = new BoundaryError('test', BoundaryErrorCode.CLI_EXECUTION_FAILED, {
           status_code: 403,
         });
-        expect(isAuthRequired(error)).toBe(true);
+        expect(isAuthRequired(error)).toBe(false);
       });
 
       it('should return false for 500 status', () => {
@@ -165,12 +166,13 @@ describe('Error Utilities', () => {
     });
 
     describe('by api_error kind in details', () => {
-      it('should return true for PermissionDenied kind', () => {
+      it('should return false for PermissionDenied kind (authorization, not authentication)', () => {
+        // PermissionDenied means authenticated but lacks permission - re-auth won't help
         const error = new BoundaryError('test', BoundaryErrorCode.CLI_EXECUTION_FAILED, {
           status_code: 403,
           api_error: { kind: 'PermissionDenied', message: 'No permission' },
         });
-        expect(isAuthRequired(error)).toBe(true);
+        expect(isAuthRequired(error)).toBe(false);
       });
 
       it('should return true for Unauthorized kind', () => {
@@ -201,15 +203,23 @@ describe('Error Utilities', () => {
         });
         expect(isAuthRequired(error)).toBe(true);
       });
+
+      it('should return false for Forbidden kind (authorization, not authentication)', () => {
+        const error = new BoundaryError('test', BoundaryErrorCode.CLI_EXECUTION_FAILED, {
+          status_code: 403,
+          api_error: { kind: 'Forbidden', message: 'Forbidden' },
+        });
+        expect(isAuthRequired(error)).toBe(false);
+      });
     });
 
     describe('by error kind in details (legacy format)', () => {
-      it('should return true for PermissionDenied in error field', () => {
+      it('should return false for PermissionDenied in error field (authorization issue)', () => {
         const error = new BoundaryError('test', BoundaryErrorCode.CLI_EXECUTION_FAILED, {
           status_code: 403,
           error: { kind: 'PermissionDenied', message: 'No permission' },
         });
-        expect(isAuthRequired(error)).toBe(true);
+        expect(isAuthRequired(error)).toBe(false);
       });
     });
 
@@ -224,9 +234,15 @@ describe('Error Utilities', () => {
         expect(isAuthRequired(error)).toBe(true);
       });
 
-      it('should return true for "permission denied" in message', () => {
+      it('should return false for "permission denied" in message (authorization issue)', () => {
+        // Permission denied is an authorization issue, not authentication
         const error = new Error('Permission denied for this resource');
-        expect(isAuthRequired(error)).toBe(true);
+        expect(isAuthRequired(error)).toBe(false);
+      });
+
+      it('should return false for "forbidden" in message (authorization issue)', () => {
+        const error = new Error('Forbidden: Access denied');
+        expect(isAuthRequired(error)).toBe(false);
       });
 
       it('should return true for "session expired" in message', () => {

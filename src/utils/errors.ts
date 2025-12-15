@@ -151,18 +151,18 @@ export function isAuthRequired(error: unknown): boolean {
       error?: { kind?: string };
     };
 
-    // Check status code
-    if (details.status_code === 401 || details.status_code === 403) {
+    // Check status code - only 401 requires re-auth
+    // Note: 403 PermissionDenied means authenticated but not authorized - re-auth won't help
+    if (details.status_code === 401) {
       return true;
     }
 
     // Check api_error/error kind (structured data)
+    // Only authentication issues, NOT authorization (permission) issues
     const apiError = details.api_error || details.error;
     const kind = apiError?.kind;
-    if (kind === 'PermissionDenied' ||
-        kind === 'Unauthorized' ||
+    if (kind === 'Unauthorized' ||
         kind === 'Unauthenticated' ||
-        kind === 'Forbidden' ||
         kind === 'SessionExpired' ||
         kind === 'TokenExpired') {
       return true;
@@ -171,12 +171,12 @@ export function isAuthRequired(error: unknown): boolean {
 
   // 3. Fallback: String patterns (least reliable, but catches edge cases)
   // Only check for specific patterns that strongly indicate auth issues
+  // Note: 'permission denied' and 'forbidden' are authorization issues, not authentication
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
     // Only check for clear auth-related patterns, avoid false positives
     if (message.includes('unauthenticated') ||
         message.includes('unauthorized') ||
-        message.includes('permission denied') ||
         message.includes('session expired') ||
         message.includes('token expired')) {
       return true;

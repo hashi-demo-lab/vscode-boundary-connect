@@ -155,18 +155,22 @@ export class TargetService implements ITargetService {
       logger.debug('Fetching targets from Boundary...');
 
       // List all targets recursively from global scope
-      const targets = await this.cli.listTargets(undefined, true);
+      const targets = await this.cli.listTargets();
 
-      // Filter to only targets user can connect to
-      const connectableTargets = targets.filter(t =>
-        t.authorizedActions.includes('authorize-session')
-      );
+      // Log which targets can be connected to
+      const connectable = targets.filter(t => t.authorizedActions.includes('authorize-session'));
+      const readOnly = targets.filter(t => !t.authorizedActions.includes('authorize-session'));
 
-      // Update cache atomically
-      this.updateCache(connectableTargets);
+      if (readOnly.length > 0) {
+        logger.info(`${readOnly.length} targets are read-only (missing authorize-session permission): ${readOnly.map(t => t.name).join(', ')}`);
+      }
+      logger.info(`${connectable.length} targets are connectable, ${targets.length} total`);
 
-      logger.debug(`Fetched ${connectableTargets.length} connectable targets`);
-      return [...connectableTargets]; // Return copy
+      // Update cache with ALL targets (UI will handle non-connectable)
+      this.updateCache(targets);
+
+      logger.debug(`Fetched ${targets.length} targets (${connectable.length} connectable)`);
+      return [...targets]; // Return all targets
     } catch (error) {
       logger.error('Failed to fetch targets:', error);
       throw error;
@@ -225,17 +229,13 @@ export class TargetService implements ITargetService {
         }
       }
 
-      const targets = await this.cli.listTargets(scopeId, false);
+      // Note: listTargets() now auto-discovers all accessible targets
+      const targets = await this.cli.listTargets();
 
-      // Filter to only targets user can connect to
-      const connectableTargets = targets.filter(t =>
-        t.authorizedActions.includes('authorize-session')
-      );
-
-      this.targetsCache.set(scopeId, connectableTargets);
+      this.targetsCache.set(scopeId, targets);
       this.lastFetchTime = Date.now();
 
-      return [...connectableTargets]; // Return copy
+      return [...targets]; // Return all targets
     } catch (error) {
       logger.error(`Failed to fetch targets for scope ${scopeId}:`, error);
       throw error;

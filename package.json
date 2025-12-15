@@ -103,12 +103,12 @@
       },
       {
         "view": "boundary.targets",
-        "contents": "Configure your Boundary controller address to get started.\n\n[$(gear) Configure Boundary Address](command:workbench.action.openSettings?%22boundary.addr%22)\n\nOr set the `BOUNDARY_ADDR` environment variable.",
+        "contents": "Welcome to HashiCorp Boundary!\n\nConnect securely to your infrastructure.\n\n[$(sign-in) Get Started](command:boundary.login)\n\nThis will:\n1. Prompt you for your Boundary server address\n2. Authenticate using your server's configured method\n\nLearn more about [Boundary](https://www.boundaryproject.io).",
         "when": "boundary.cliInstalled && !boundary.addrConfigured"
       },
       {
         "view": "boundary.targets",
-        "contents": "Connect securely to your infrastructure through HashiCorp Boundary.\n\nAuthenticate to view available targets.\n[$(sign-in) Sign In to Boundary](command:boundary.login)\n\nLearn more about [Boundary](https://www.boundaryproject.io).",
+        "contents": "Ready to connect to your infrastructure.\n\n[$(sign-in) Sign In to Boundary](command:boundary.login)\n\nAuthentication method depends on your server configuration (OIDC or password).\n\n[$(gear) Settings](command:workbench.action.openSettings?%22boundary%22)",
         "when": "boundary.cliInstalled && boundary.addrConfigured && !boundary.authenticated"
       }
     ],

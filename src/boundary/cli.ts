@@ -347,21 +347,56 @@ export class BoundaryCLI implements IBoundaryCLI {
     }
   }
 
-  async listAuthMethods(scopeId?: string): Promise<BoundaryAuthMethod[]> {
-    const args = ['auth-methods', 'list', '-format', 'json'];
-    if (scopeId) {
-      args.push('-scope-id', scopeId);
-    } else {
-      // Default to global scope for auth methods discovery
-      args.push('-scope-id', 'global');
+  /**
+   * List auth methods from a specific scope
+   */
+  private async listAuthMethodsFromScope(scopeId: string): Promise<BoundaryAuthMethod[]> {
+    const args = ['auth-methods', 'list', '-format', 'json', '-scope-id', scopeId];
+    const env = this.getCliEnv();
+    logger.debug(`listAuthMethodsFromScope: scopeId=${scopeId}`);
+
+    try {
+      const result = await this.execute(args, 10000);
+      return parseAuthMethodsResponse(result.stdout);
+    } catch (err) {
+      logger.debug(`No auth methods in scope ${scopeId}:`, err);
+      return [];
+    }
+  }
+
+  /**
+   * Discover all auth methods from global and all org scopes
+   * No configuration required - automatically finds all available auth methods
+   */
+  async listAuthMethods(): Promise<BoundaryAuthMethod[]> {
+    const env = this.getCliEnv();
+    logger.info(`Discovering auth methods from BOUNDARY_ADDR=${env.BOUNDARY_ADDR || '(not set)'}`);
+
+    const allAuthMethods: BoundaryAuthMethod[] = [];
+
+    // First, get auth methods from global scope
+    const globalMethods = await this.listAuthMethodsFromScope('global');
+    allAuthMethods.push(...globalMethods);
+    logger.info(`Found ${globalMethods.length} auth methods in global scope`);
+
+    // Then, discover org scopes and get their auth methods
+    try {
+      const orgScopes = await this.listScopes('global');
+      logger.info(`Found ${orgScopes.length} org scopes to search`);
+
+      for (const org of orgScopes) {
+        const orgMethods = await this.listAuthMethodsFromScope(org.id);
+        allAuthMethods.push(...orgMethods);
+        if (orgMethods.length > 0) {
+          logger.info(`Found ${orgMethods.length} auth methods in org "${org.name}" (${org.id})`);
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to list org scopes:', err);
     }
 
-    const env = this.getCliEnv();
-    logger.info(`listAuthMethods: BOUNDARY_ADDR=${env.BOUNDARY_ADDR || '(not set)'}`);
-
-    // Use shorter timeout for discovery (10s) - if server is unreachable, fail fast
-    const result = await this.execute(args, 10000);
-    return parseAuthMethodsResponse(result.stdout);
+    logger.info(`Total auth methods discovered: ${allAuthMethods.length}`);
+    return allAuthMethods;
   }
 
   async listScopes(parentScopeId?: string): Promise<BoundaryScope[]> {
@@ -374,17 +409,84 @@ export class BoundaryCLI implements IBoundaryCLI {
     return parseScopesResponse(result.stdout);
   }
 
-  async listTargets(scopeId?: string, recursive = true): Promise<BoundaryTarget[]> {
+  /**
+   * List targets from a specific scope
+   */
+  private async listTargetsFromScope(scopeId: string, recursive = true): Promise<BoundaryTarget[]> {
     const args = ['targets', 'list', '-format', 'json', ...this.getKeyringArgs()];
-    if (scopeId) {
-      args.push('-scope-id', scopeId);
-    }
+    args.push('-scope-id', scopeId);
     if (recursive) {
       args.push('-recursive');
     }
 
-    const result = await this.execute(args);
-    return parseTargetsResponse(result.stdout);
+    try {
+      const result = await this.execute(args);
+      return parseTargetsResponse(result.stdout);
+    } catch (err) {
+      logger.debug(`No targets accessible from scope ${scopeId}:`, err);
+      return [];
+    }
+  }
+
+  /**
+   * Discover all targets the user has access to
+   * Searches global, orgs, and projects for accessible targets
+   */
+  async listTargets(): Promise<BoundaryTarget[]> {
+    logger.info('Discovering all accessible targets...');
+    const allTargets: BoundaryTarget[] = [];
+    const seenIds = new Set<string>();
+
+    // Helper to add targets without duplicates
+    const addTargets = (targets: BoundaryTarget[]) => {
+      for (const target of targets) {
+        if (!seenIds.has(target.id)) {
+          seenIds.add(target.id);
+          allTargets.push(target);
+        }
+      }
+    };
+
+    // Try global scope first (works if user has broad permissions)
+    const globalTargets = await this.listTargetsFromScope('global', true);
+    addTargets(globalTargets);
+    if (globalTargets.length > 0) {
+      logger.info(`Found ${globalTargets.length} targets from global scope`);
+    }
+
+    // Discover org and project scopes and try each
+    try {
+      const orgScopes = await this.listScopes('global');
+      logger.info(`Searching ${orgScopes.length} org scopes for targets...`);
+
+      for (const org of orgScopes) {
+        // Try org scope
+        const orgTargets = await this.listTargetsFromScope(org.id, true);
+        addTargets(orgTargets);
+        if (orgTargets.length > 0) {
+          logger.info(`Found ${orgTargets.length} targets in org "${org.name}"`);
+        }
+
+        // Try project scopes within org
+        try {
+          const projectScopes = await this.listScopes(org.id);
+          for (const project of projectScopes) {
+            const projectTargets = await this.listTargetsFromScope(project.id, false);
+            addTargets(projectTargets);
+            if (projectTargets.length > 0) {
+              logger.info(`Found ${projectTargets.length} targets in project "${project.name}"`);
+            }
+          }
+        } catch {
+          // Skip if can't list projects
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to discover scopes:', err);
+    }
+
+    logger.info(`Total targets discovered: ${allTargets.length}`);
+    return allTargets;
   }
 
   async authorizeSession(targetId: string): Promise<SessionAuthorization> {
@@ -573,12 +675,11 @@ export class BoundaryCLI implements IBoundaryCLI {
   private classifyErrorMessage(message: string, statusCode?: number): BoundaryErrorCode {
     const lowerMessage = message.toLowerCase();
 
-    // Check for auth-related errors
-    if (statusCode === 401 || statusCode === 403 ||
+    // Check for auth-related errors (only 401 - authentication issues)
+    // Note: 403/PermissionDenied means authenticated but not authorized - re-auth won't help
+    if (statusCode === 401 ||
         lowerMessage.includes('unauthorized') ||
-        lowerMessage.includes('unauthenticated') ||
-        lowerMessage.includes('forbidden') ||
-        lowerMessage.includes('permission denied')) {
+        lowerMessage.includes('unauthenticated')) {
       return BoundaryErrorCode.AUTH_FAILED;
     }
 

@@ -9,7 +9,11 @@ import {
   parseScopesResponse,
   parseTargetsResponse,
   PORT_REGEX,
+  classifyApiError,
+  isAuthRequired,
+  isPermissionDenied,
 } from '../../../src/boundary/parser';
+import { BoundaryErrorCode } from '../../../src/utils/errors';
 import {
   mockBoundaryResponses,
   mockAuthMethodsResponse,
@@ -275,6 +279,94 @@ describe('Boundary Parser', () => {
       const result = parseAuthMethodsResponse(json);
 
       expect(result[0].name).toBe('Single Sign-On (OIDC)');
+    });
+  });
+
+  describe('isAuthRequired', () => {
+    it('should return true for 401 status', () => {
+      expect(isAuthRequired({ status_code: 401 })).toBe(true);
+    });
+
+    it('should return false for 403 status (authorization, not authentication)', () => {
+      // 403 means authenticated but not authorized - user shouldn't re-login
+      expect(isAuthRequired({ status_code: 403 })).toBe(false);
+    });
+
+    it('should return true for Unauthorized kind', () => {
+      expect(isAuthRequired({ api_error: { kind: 'Unauthorized', message: 'test' } })).toBe(true);
+    });
+
+    it('should return true for Unauthenticated kind', () => {
+      expect(isAuthRequired({ api_error: { kind: 'Unauthenticated', message: 'test' } })).toBe(true);
+    });
+
+    it('should return false for PermissionDenied kind', () => {
+      expect(isAuthRequired({ api_error: { kind: 'PermissionDenied', message: 'test' } })).toBe(false);
+    });
+
+    it('should return false for Forbidden kind', () => {
+      expect(isAuthRequired({ api_error: { kind: 'Forbidden', message: 'test' } })).toBe(false);
+    });
+  });
+
+  describe('isPermissionDenied', () => {
+    it('should return true for 403 status', () => {
+      expect(isPermissionDenied({ status_code: 403 })).toBe(true);
+    });
+
+    it('should return false for 401 status', () => {
+      expect(isPermissionDenied({ status_code: 401 })).toBe(false);
+    });
+
+    it('should return true for PermissionDenied kind', () => {
+      expect(isPermissionDenied({ api_error: { kind: 'PermissionDenied', message: 'test' } })).toBe(true);
+    });
+
+    it('should return true for Forbidden kind', () => {
+      expect(isPermissionDenied({ api_error: { kind: 'Forbidden', message: 'test' } })).toBe(true);
+    });
+  });
+
+  describe('classifyApiError', () => {
+    it('should return AUTH_FAILED for 401 Unauthenticated', () => {
+      const response = {
+        status_code: 401,
+        api_error: { kind: 'Unauthenticated', message: 'Invalid token' },
+      };
+      expect(classifyApiError(response)).toBe(BoundaryErrorCode.AUTH_FAILED);
+    });
+
+    it('should return CLI_EXECUTION_FAILED for 403 PermissionDenied (not AUTH_FAILED)', () => {
+      // 403 should NOT trigger re-auth - user is authenticated but lacks permission
+      const response = {
+        status_code: 403,
+        api_error: { kind: 'PermissionDenied', message: 'Forbidden' },
+      };
+      expect(classifyApiError(response)).toBe(BoundaryErrorCode.CLI_EXECUTION_FAILED);
+    });
+
+    it('should return TOKEN_EXPIRED for SessionExpired', () => {
+      const response = {
+        api_error: { kind: 'SessionExpired', message: 'Session has ended' },
+      };
+      expect(classifyApiError(response)).toBe(BoundaryErrorCode.TOKEN_EXPIRED);
+    });
+
+    it('should return TOKEN_EXPIRED for TokenExpired', () => {
+      const response = {
+        api_error: { kind: 'TokenExpired', message: 'Token expired' },
+      };
+      expect(classifyApiError(response)).toBe(BoundaryErrorCode.TOKEN_EXPIRED);
+    });
+
+    it('should return TARGET_NOT_FOUND for 404', () => {
+      const response = { status_code: 404 };
+      expect(classifyApiError(response)).toBe(BoundaryErrorCode.TARGET_NOT_FOUND);
+    });
+
+    it('should return CLI_EXECUTION_FAILED for 500', () => {
+      const response = { status_code: 500 };
+      expect(classifyApiError(response)).toBe(BoundaryErrorCode.CLI_EXECUTION_FAILED);
     });
   });
 });
