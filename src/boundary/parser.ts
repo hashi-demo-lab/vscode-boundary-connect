@@ -127,7 +127,7 @@ const SessionAuthItemSchema = z.object({
   authorization_token: z.string(),
   endpoint: z.string(),
   endpoint_port: z.number(),
-  expiration_time: z.string(),
+  expiration: z.string(),
   credentials: z.array(BrokeredCredentialSchema).optional(),
 });
 
@@ -247,7 +247,7 @@ interface AuthResponseItem {
   user_id: string;
   account_id: string;
   auth_method_id: string;
-  expiration_time: string;
+  expiration: string;
 }
 
 export function parseAuthResponse(output: string): AuthResult {
@@ -301,7 +301,7 @@ export function parseAuthResponse(output: string): AuthResult {
     token: item.token,
     accountId: item.account_id,
     userId: item.user_id,
-    expirationTime: item.expiration_time ? new Date(item.expiration_time) : undefined,
+    expirationTime: item.expiration ? new Date(item.expiration) : undefined,
   };
 }
 
@@ -481,7 +481,7 @@ interface _SessionAuthResponseItem {
   authorization_token: string;
   endpoint: string;
   endpoint_port: number;
-  expiration_time: string;
+  expiration: string;
   credentials?: BrokeredCredentialItem[];
 }
 
@@ -522,7 +522,7 @@ export function parseSessionAuthResponse(output: string): SessionAuthorization {
     authorizationToken: item.authorization_token,
     endpoint: item.endpoint,
     endpointPort: item.endpoint_port,
-    expiration: new Date(item.expiration_time),
+    expiration: new Date(item.expiration),
     credentials,
   };
 }

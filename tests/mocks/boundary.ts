@@ -20,7 +20,7 @@ export const mockAuthSuccessResponse = {
     user_id: 'u_mock123',
     account_id: 'acctpw_mock123',
     auth_method_id: 'ampw_mock123',
-    expiration_time: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    expiration: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
   },
 };
 
@@ -105,7 +105,7 @@ export const mockSessionAuthResponse = {
     authorization_token: 'at_session_mock123',
     endpoint: 'boundary-worker.mock.local',
     endpoint_port: 9202,
-    expiration_time: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
+    expiration: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
     credentials: [],
   },
 };
