@@ -89,42 +89,41 @@ interface ApiAuthMethod {
 
 /**
  * Session authorization response from API
+ * Note: authorize-session returns the session object directly, not wrapped in "item"
  */
 interface ApiSessionAuth {
-  item: {
-    session_id: string;
-    target_id: string;
-    authorization_token: string;
-    endpoint: string;
-    endpoint_port?: number;
-    expiration?: string;
-    credentials?: Array<{
-      credential_source?: {
-        id: string;
-        name?: string;
-        description?: string;
-        credential_store_id?: string;
-        type?: string;
-      };
-      credential?: {
-        username?: string;
-        password?: string;
-        private_key?: string;
-        private_key_passphrase?: string;
-        certificate?: string;
-      };
-      secret?: {
-        decoded?: {
-          data?: {
-            username?: string;
-            private_key?: string;
-            certificate?: string;
-            private_key_passphrase?: string;
-          };
+  session_id: string;
+  target_id: string;
+  authorization_token: string;
+  endpoint: string;
+  endpoint_port?: number;
+  expiration?: string;
+  credentials?: Array<{
+    credential_source?: {
+      id: string;
+      name?: string;
+      description?: string;
+      credential_store_id?: string;
+      type?: string;
+    };
+    credential?: {
+      username?: string;
+      password?: string;
+      private_key?: string;
+      private_key_passphrase?: string;
+      certificate?: string;
+    };
+    secret?: {
+      decoded?: {
+        data?: {
+          username?: string;
+          private_key?: string;
+          certificate?: string;
+          private_key_passphrase?: string;
         };
       };
-    }>;
-  };
+    };
+  }>;
 }
 
 export class BoundaryAPI {
@@ -334,27 +333,27 @@ export class BoundaryAPI {
     const startTime = Date.now();
 
     try {
+      // authorize-session returns session data directly, not wrapped in "item"
       const response = await this.request<ApiSessionAuth>(
         'POST',
         `/v1/targets/${encodeURIComponent(targetId)}:authorize-session`,
         {} // Empty body - target ID is in URL
       );
 
-      const item = response.item;
-      if (!item) {
-        throw new BoundaryError('Invalid authorize-session response', BoundaryErrorCode.CLI_EXECUTION_FAILED);
+      if (!response.session_id) {
+        throw new BoundaryError('Invalid authorize-session response: missing session_id', BoundaryErrorCode.CLI_EXECUTION_FAILED);
       }
 
       const sessionAuth: SessionAuthorization = {
-        sessionId: item.session_id,
-        authorizationToken: item.authorization_token,
-        endpoint: item.endpoint,
-        endpointPort: item.endpoint_port || 0,
-        expiration: item.expiration ? new Date(item.expiration) : new Date(),
-        credentials: this.mapCredentials(item.credentials),
+        sessionId: response.session_id,
+        authorizationToken: response.authorization_token,
+        endpoint: response.endpoint,
+        endpointPort: response.endpoint_port || 0,
+        expiration: response.expiration ? new Date(response.expiration) : new Date(),
+        credentials: this.mapCredentials(response.credentials),
       };
 
-      logger.debug(`API: Authorized session ${item.session_id} in ${Date.now() - startTime}ms`);
+      logger.debug(`API: Authorized session ${response.session_id} in ${Date.now() - startTime}ms`);
       return sessionAuth;
     } catch (err) {
       logger.error(`API: Failed to authorize session:`, err);
@@ -429,7 +428,7 @@ export class BoundaryAPI {
   /**
    * Map API credentials to internal type
    */
-  private mapCredentials(apiCredentials?: ApiSessionAuth['item']['credentials']): BrokeredCredential[] | undefined {
+  private mapCredentials(apiCredentials?: ApiSessionAuth['credentials']): BrokeredCredential[] | undefined {
     if (!apiCredentials || apiCredentials.length === 0) {
       return undefined;
     }

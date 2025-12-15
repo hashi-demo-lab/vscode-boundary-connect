@@ -289,14 +289,13 @@ describe('BoundaryAPI', () => {
   describe('authorizeSession', () => {
     it('should call the authorize-session API endpoint', async () => {
       const mockReq = createMockRequest();
+      // Note: authorize-session returns session data directly, not wrapped in "item"
       const mockRes = createMockResponse(200, {
-        item: {
-          session_id: 's_123',
-          authorization_token: 'auth-token-xyz',
-          endpoint: '10.0.0.1',
-          endpoint_port: 22,
-          expiration: '2025-12-16T00:00:00Z',
-        },
+        session_id: 's_123',
+        authorization_token: 'auth-token-xyz',
+        endpoint: '10.0.0.1',
+        endpoint_port: 22,
+        expiration: '2025-12-16T00:00:00Z',
       });
 
       mockHttpsRequest.mockImplementation((options, callback) => {
@@ -320,25 +319,23 @@ describe('BoundaryAPI', () => {
     it('should handle brokered credentials in response', async () => {
       const mockReq = createMockRequest();
       const mockRes = createMockResponse(200, {
-        item: {
-          session_id: 's_123',
-          authorization_token: 'auth-token-xyz',
-          endpoint: '10.0.0.1',
-          endpoint_port: 22,
-          credentials: [
-            {
-              credential_source: {
-                id: 'clvlt_123',
-                name: 'SSH Credentials',
-                type: 'vault-generic',
-              },
-              credential: {
-                username: 'admin',
-                private_key: '-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----',
-              },
+        session_id: 's_123',
+        authorization_token: 'auth-token-xyz',
+        endpoint: '10.0.0.1',
+        endpoint_port: 22,
+        credentials: [
+          {
+            credential_source: {
+              id: 'clvlt_123',
+              name: 'SSH Credentials',
+              type: 'vault-generic',
             },
-          ],
-        },
+            credential: {
+              username: 'admin',
+              private_key: '-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----',
+            },
+          },
+        ],
       });
 
       mockHttpsRequest.mockImplementation((options, callback) => {
@@ -357,29 +354,27 @@ describe('BoundaryAPI', () => {
     it('should handle Vault secret structure in credentials', async () => {
       const mockReq = createMockRequest();
       const mockRes = createMockResponse(200, {
-        item: {
-          session_id: 's_123',
-          authorization_token: 'auth-token-xyz',
-          endpoint: '10.0.0.1',
-          credentials: [
-            {
-              credential_source: {
-                id: 'clvlt_123',
-                name: 'SSH Brokered',
-                type: 'vault-generic',
-              },
-              secret: {
-                decoded: {
-                  data: {
-                    username: 'node',
-                    private_key: '-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----',
-                    certificate: 'ssh-ed25519-cert-v01@openssh.com AAAA...',
-                  },
+        session_id: 's_123',
+        authorization_token: 'auth-token-xyz',
+        endpoint: '10.0.0.1',
+        credentials: [
+          {
+            credential_source: {
+              id: 'clvlt_123',
+              name: 'SSH Brokered',
+              type: 'vault-generic',
+            },
+            secret: {
+              decoded: {
+                data: {
+                  username: 'node',
+                  private_key: '-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----',
+                  certificate: 'ssh-ed25519-cert-v01@openssh.com AAAA...',
                 },
               },
             },
-          ],
-        },
+          },
+        ],
       });
 
       mockHttpsRequest.mockImplementation((options, callback) => {
