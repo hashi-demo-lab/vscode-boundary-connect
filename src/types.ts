@@ -288,6 +288,8 @@ export interface RemoteSSHConnectionOptions {
   host: string;
   port: number;
   userName?: string;
+  privateKey?: string;
+  privateKeyPassphrase?: string;
 }
 
 export interface IRemoteSSHIntegration {

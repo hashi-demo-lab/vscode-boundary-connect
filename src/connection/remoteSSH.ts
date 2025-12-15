@@ -16,6 +16,7 @@ import { logger } from '../utils/logger';
 
 const REMOTE_SSH_EXTENSION_ID = 'ms-vscode-remote.remote-ssh';
 const BOUNDARY_SSH_CONFIG_MARKER = '# Boundary VS Code Extension - Auto-generated';
+const BOUNDARY_KEYS_DIR = '.boundary-keys';
 
 /**
  * Check if Remote SSH extension is installed
@@ -64,10 +65,55 @@ function generateBoundaryHostAlias(port: number, targetName?: string): string {
 }
 
 /**
+ * Get the directory for storing brokered SSH keys
+ */
+function getBoundaryKeysDir(): string {
+  return path.join(os.homedir(), '.ssh', BOUNDARY_KEYS_DIR);
+}
+
+/**
+ * Save a brokered private key to a temporary file
+ * Returns the path to the key file
+ */
+async function saveBrokeredKey(port: number, targetName: string | undefined, privateKey: string): Promise<string> {
+  const keysDir = getBoundaryKeysDir();
+  const hostAlias = generateBoundaryHostAlias(port, targetName);
+  const keyPath = path.join(keysDir, `${hostAlias}.pem`);
+
+  // Ensure keys directory exists with secure permissions
+  try {
+    await fs.promises.mkdir(keysDir, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    logger.debug('Keys directory already exists or created:', err);
+  }
+
+  // Write the key with secure permissions (owner read-only)
+  await fs.promises.writeFile(keyPath, privateKey, { mode: 0o600 });
+  logger.info(`Saved brokered SSH key to ${keyPath}`);
+
+  return keyPath;
+}
+
+/**
+ * Remove a brokered key file
+ */
+async function removeBrokeredKey(port: number, targetName?: string): Promise<void> {
+  const hostAlias = generateBoundaryHostAlias(port, targetName);
+  const keyPath = path.join(getBoundaryKeysDir(), `${hostAlias}.pem`);
+
+  try {
+    await fs.promises.unlink(keyPath);
+    logger.debug(`Removed brokered key: ${keyPath}`);
+  } catch {
+    // Key may not exist, that's fine
+  }
+}
+
+/**
  * Create or update SSH config entry for Boundary connection
  * This allows Remote SSH to connect to localhost on a custom port
  */
-async function ensureSSHConfigEntry(options: RemoteSSHConnectionOptions & { targetName?: string }): Promise<string> {
+async function ensureSSHConfigEntry(options: RemoteSSHConnectionOptions & { targetName?: string; keyPath?: string }): Promise<string> {
   const sshDir = path.join(os.homedir(), '.ssh');
   const configPath = getSSHConfigPath();
   const hostAlias = generateBoundaryHostAlias(options.port, options.targetName);
@@ -93,6 +139,13 @@ async function ensureSSHConfigEntry(options: RemoteSSHConnectionOptions & { targ
 
   if (options.userName) {
     entryLines.push(`  User ${options.userName}`);
+  }
+
+  // Add brokered key if provided
+  if (options.keyPath) {
+    entryLines.push(`  IdentityFile ${options.keyPath}`);
+    entryLines.push('  IdentitiesOnly yes');
+    logger.info(`SSH config will use brokered key: ${options.keyPath}`);
   }
 
   entryLines.push(
@@ -163,6 +216,9 @@ export async function removeBoundarySSHConfigEntry(port: number, targetName?: st
   } catch (err) {
     logger.debug(`Failed to remove SSH config entry for ${hostAlias}:`, err);
   }
+
+  // Also remove the brokered key file if it exists
+  await removeBrokeredKey(port, targetName);
 }
 
 /**
@@ -221,11 +277,22 @@ export async function triggerRemoteSSH(options: RemoteSSHConnectionOptions & { t
     await extension.activate();
   }
 
+  // Save brokered private key if provided
+  let keyPath: string | undefined;
+  if (options.privateKey) {
+    try {
+      keyPath = await saveBrokeredKey(options.port, options.targetName, options.privateKey);
+    } catch (err) {
+      logger.error('Failed to save brokered SSH key:', err);
+      // Continue without the key - SSH may still work with agent or other auth
+    }
+  }
+
   // Create SSH config entry for this connection
   // This is the key fix - Remote SSH needs an SSH config alias for custom ports
   let hostAlias: string;
   try {
-    hostAlias = await ensureSSHConfigEntry(options);
+    hostAlias = await ensureSSHConfigEntry({ ...options, keyPath });
     logger.info(`Created SSH config entry with alias: ${hostAlias}`);
   } catch (err) {
     logger.error('Failed to create SSH config entry:', err);
