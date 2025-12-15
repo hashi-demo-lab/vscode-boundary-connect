@@ -352,7 +352,6 @@ export class BoundaryCLI implements IBoundaryCLI {
    */
   private async listAuthMethodsFromScope(scopeId: string): Promise<BoundaryAuthMethod[]> {
     const args = ['auth-methods', 'list', '-format', 'json', '-scope-id', scopeId];
-    const env = this.getCliEnv();
     logger.debug(`listAuthMethodsFromScope: scopeId=${scopeId}`);
 
     try {
@@ -366,9 +365,15 @@ export class BoundaryCLI implements IBoundaryCLI {
 
   /**
    * Discover all auth methods from global and all org scopes
-   * No configuration required - automatically finds all available auth methods
+   * If scopeId is provided, lists from that scope only (for testing/advanced use)
+   * Otherwise, auto-discovers from all available scopes
    */
-  async listAuthMethods(): Promise<BoundaryAuthMethod[]> {
+  async listAuthMethods(scopeId?: string): Promise<BoundaryAuthMethod[]> {
+    // If specific scope provided, use it directly (for backward compatibility and testing)
+    if (scopeId) {
+      return this.listAuthMethodsFromScope(scopeId);
+    }
+
     const env = this.getCliEnv();
     logger.info(`Discovering auth methods from BOUNDARY_ADDR=${env.BOUNDARY_ADDR || '(not set)'}`);
 
@@ -430,9 +435,15 @@ export class BoundaryCLI implements IBoundaryCLI {
 
   /**
    * Discover all targets the user has access to
-   * Searches global, orgs, and projects for accessible targets
+   * If scopeId is provided, lists from that scope only (for testing/advanced use)
+   * Otherwise, searches global, orgs, and projects for accessible targets
    */
-  async listTargets(): Promise<BoundaryTarget[]> {
+  async listTargets(scopeId?: string): Promise<BoundaryTarget[]> {
+    // If specific scope provided, use it directly (for backward compatibility and testing)
+    if (scopeId) {
+      return this.listTargetsFromScope(scopeId, true);
+    }
+
     logger.info('Discovering all accessible targets...');
     const allTargets: BoundaryTarget[] = [];
     const seenIds = new Set<string>();
