@@ -28,11 +28,7 @@ import { IConfigurationService } from '../types';
 import {
   extractPort,
   extractVersion,
-  parseAuthMethodsResponse,
   parseAuthResponse,
-  parseScopesResponse,
-  parseSessionAuthResponse,
-  parseTargetsResponse,
 } from './parser';
 import { BoundaryAPI } from './api';
 

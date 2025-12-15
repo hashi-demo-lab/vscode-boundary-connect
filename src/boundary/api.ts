@@ -211,14 +211,14 @@ export class BoundaryAPI {
             }
 
             if (res.statusCode && res.statusCode >= 400) {
-              const errorBody = data ? JSON.parse(data) : {};
-              const message = errorBody.message || errorBody.error || `API error: ${res.statusCode}`;
+              const errorBody = data ? JSON.parse(data) as { message?: string; error?: string } : {};
+              const message = errorBody.message ?? errorBody.error ?? `API error: ${res.statusCode}`;
               reject(new BoundaryError(message, BoundaryErrorCode.CLI_EXECUTION_FAILED));
               return;
             }
 
-            const parsed = data ? JSON.parse(data) : {};
-            resolve(parsed as T);
+            const parsed = data ? JSON.parse(data) as T : {} as T;
+            resolve(parsed);
           } catch (err) {
             reject(new BoundaryError(
               `Failed to parse API response: ${err instanceof Error ? err.message : String(err)}`,
