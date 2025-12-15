@@ -2,5 +2,6 @@
   "boundary.addr": "https://boundary.local",
   "boundary.tlsInsecure": true,
   "boundary.defaultAuthMethod": "oidc",
-  "boundary.logLevel": "debug"
+  "boundary.logLevel": "debug",
+  "boundary.autoConnect": true
 }

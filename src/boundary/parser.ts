@@ -632,7 +632,9 @@ export function classifyApiError(response: BoundaryApiResponse): BoundaryErrorCo
   if (isTokenExpired(response)) {
     return BoundaryErrorCode.TOKEN_EXPIRED;
   }
-  if (isAuthRequired(response) || isPermissionDenied(response)) {
+  // Note: Only authentication errors (401) require re-auth
+  // Permission denied (403) means authenticated but not authorized - re-auth won't help
+  if (isAuthRequired(response)) {
     return BoundaryErrorCode.AUTH_FAILED;
   }
 
@@ -640,6 +642,10 @@ export function classifyApiError(response: BoundaryApiResponse): BoundaryErrorCo
   const statusCode = response.status_code ?? 200;
   if (statusCode === 404) {
     return BoundaryErrorCode.TARGET_NOT_FOUND;
+  }
+  if (statusCode === 403) {
+    // Permission denied - user is authenticated but lacks permission
+    return BoundaryErrorCode.CLI_EXECUTION_FAILED;
   }
   if (statusCode >= 500) {
     return BoundaryErrorCode.CLI_EXECUTION_FAILED;

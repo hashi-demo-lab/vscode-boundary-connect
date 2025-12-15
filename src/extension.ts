@@ -60,10 +60,18 @@ function createServiceFactories(): ServiceFactories {
 }
 
 /**
+ * Welcome view context state
+ */
+interface WelcomeViewContext {
+  cliInstalled: boolean;
+  addrConfigured: boolean;
+}
+
+/**
  * Update welcome view context values based on current state.
  * This enables smart welcome views that guide users through setup.
  */
-async function updateWelcomeViewContext(container: IServiceContainer): Promise<boolean> {
+async function updateWelcomeViewContext(container: IServiceContainer): Promise<WelcomeViewContext> {
   const cli = container.cli;
   const config = container.config;
 
@@ -78,7 +86,7 @@ async function updateWelcomeViewContext(container: IServiceContainer): Promise<b
   await vscode.commands.executeCommand('setContext', 'boundary.addrConfigured', addrConfigured);
 
   logger.debug('Welcome view context updated:', { cliInstalled, addrConfigured });
-  return cliInstalled;
+  return { cliInstalled, addrConfigured };
 }
 
 /**
@@ -108,13 +116,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Set welcome view context values (CLI installed, address configured)
   // This enables smart welcome views that guide users through setup
-  const cliInstalled = await updateWelcomeViewContext(serviceContainer);
+  const welcomeContext = await updateWelcomeViewContext(serviceContainer);
 
-  if (cliInstalled) {
+  if (welcomeContext.cliInstalled) {
     const version = await serviceContainer.cli.getVersion();
     logger.info('Boundary CLI version:', version || 'unknown');
   } else {
     logger.warn('Boundary CLI not found - welcome view will guide installation');
+  }
+
+  if (!welcomeContext.addrConfigured) {
+    logger.warn('Boundary address not configured - welcome view will guide configuration');
   }
 
   // Initialize auth manager from container
@@ -132,8 +144,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   targetProvider.initialize(); // Set up event subscriptions
   context.subscriptions.push(targetProvider);
 
-  // Auto-fetch targets if already authenticated (since state change fired before subscription)
-  if ((authManager as AuthManager).state === 'authenticated') {
+  // Auto-fetch targets if already authenticated AND address is configured
+  // (since state change fired before subscription)
+  if ((authManager as AuthManager).state === 'authenticated' && welcomeContext.addrConfigured) {
     targetProvider.refresh();
   }
 
@@ -189,6 +202,19 @@ function registerCommands(context: vscode.ExtensionContext): void {
 
       // Refresh targets after successful login
       if (result.success) {
+        targetProvider.refresh();
+      }
+    })
+  );
+
+  // Password login command (used when OIDC redirects to password)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('boundary.loginPassword', async () => {
+      logger.info('boundary.loginPassword command invoked');
+      const result = await executePasswordAuth(authManager);
+
+      // Refresh targets after successful login
+      if (result?.success) {
         targetProvider.refresh();
       }
     })
