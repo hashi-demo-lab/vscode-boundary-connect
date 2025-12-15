@@ -116,9 +116,29 @@ const CredentialSchema = z.object({
   private_key_passphrase: z.string().optional(),
 });
 
+// Vault-generic credentials use secret.decoded.data structure
+const VaultSecretDataSchema = z.object({
+  username: z.string().optional(),
+  password: z.string().optional(),
+  private_key: z.string().optional(),
+  private_key_passphrase: z.string().optional(),
+  certificate: z.string().optional(),
+  public_key: z.string().optional(),
+}).passthrough(); // Allow additional fields
+
+const VaultSecretSchema = z.object({
+  raw: z.string().optional(),
+  decoded: z.object({
+    data: VaultSecretDataSchema.optional(),
+  }).optional(),
+}).optional();
+
 const BrokeredCredentialSchema = z.object({
   credential_source: CredentialSourceSchema,
-  credential: CredentialSchema,
+  // Static credentials
+  credential: CredentialSchema.optional(),
+  // Vault-generic credentials
+  secret: VaultSecretSchema,
 });
 
 const SessionAuthItemSchema = z.object({
@@ -501,21 +521,34 @@ export function parseSessionAuthResponse(output: string): SessionAuthorization {
   }
 
   // Parse brokered credentials if present
-  const credentials = item.credentials?.map(cred => ({
-    credentialSource: {
-      id: cred.credential_source.id,
-      name: cred.credential_source.name,
-      description: cred.credential_source.description,
-      credentialStoreId: cred.credential_source.credential_store_id,
-      type: cred.credential_source.type,
-    },
-    credential: {
-      username: cred.credential.username,
-      password: cred.credential.password,
-      privateKey: cred.credential.private_key,
-      privateKeyPassphrase: cred.credential.private_key_passphrase,
-    },
-  }));
+  // Handle both static credentials (credential field) and Vault-generic credentials (secret.decoded.data)
+  const credentials = item.credentials?.map(cred => {
+    // Try to get credentials from either source
+    const staticCred = cred.credential;
+    const vaultCred = cred.secret?.decoded?.data;
+
+    // Prefer Vault credentials if available, fall back to static
+    const username = vaultCred?.username || staticCred?.username;
+    const password = vaultCred?.password || staticCred?.password;
+    const privateKey = vaultCred?.private_key || staticCred?.private_key;
+    const privateKeyPassphrase = vaultCred?.private_key_passphrase || staticCred?.private_key_passphrase;
+
+    return {
+      credentialSource: {
+        id: cred.credential_source.id,
+        name: cred.credential_source.name,
+        description: cred.credential_source.description,
+        credentialStoreId: cred.credential_source.credential_store_id,
+        type: cred.credential_source.type,
+      },
+      credential: {
+        username,
+        password,
+        privateKey,
+        privateKeyPassphrase,
+      },
+    };
+  });
 
   return {
     sessionId: item.session_id,
