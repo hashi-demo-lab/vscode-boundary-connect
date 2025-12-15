@@ -44,16 +44,40 @@ export class ConnectionManager implements IConnectionManager {
     // First, try to get session authorization to check for brokered credentials
     let brokeredCredentials: BrokeredCredential[] | undefined;
     let userName: string | undefined;
+    let privateKey: string | undefined;
+    let privateKeyPassphrase: string | undefined;
+    let certificate: string | undefined;
 
     try {
       const authz = await this.cli.authorizeSession(target.id);
+      logger.debug('authorize-session response:', {
+        hasCredentials: !!authz.credentials,
+        credentialCount: authz.credentials?.length
+      });
       if (authz.credentials && authz.credentials.length > 0) {
         brokeredCredentials = authz.credentials;
-        // Use username from brokered credentials if available
+        // Use credentials from first brokered credential
         const cred = brokeredCredentials[0];
+        logger.debug('First credential:', {
+          hasCredential: !!cred.credential,
+          hasUsername: !!cred.credential?.username,
+          hasPrivateKey: !!cred.credential?.privateKey,
+          credentialKeys: cred.credential ? Object.keys(cred.credential) : []
+        });
         if (cred.credential.username) {
           userName = cred.credential.username;
           logger.info(`Using brokered username: ${userName}`);
+        }
+        if (cred.credential.privateKey) {
+          privateKey = cred.credential.privateKey;
+          privateKeyPassphrase = cred.credential.privateKeyPassphrase;
+          logger.info('Using brokered SSH private key');
+        } else {
+          logger.warn('No privateKey in brokered credential');
+        }
+        if (cred.credential.certificate) {
+          certificate = cred.credential.certificate;
+          logger.info('Using brokered SSH certificate (Vault key signing)');
         }
       }
     } catch (error) {
@@ -100,6 +124,9 @@ export class ConnectionManager implements IConnectionManager {
           host: session.localHost,
           port: session.localPort,
           userName: userName || undefined,
+          privateKey: privateKey,
+          privateKeyPassphrase: privateKeyPassphrase,
+          certificate: certificate,
           targetName: target.name,
         });
       } catch (error) {

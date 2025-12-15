@@ -198,6 +198,7 @@ export interface BrokeredCredential {
     password?: string;
     privateKey?: string;
     privateKeyPassphrase?: string;
+    certificate?: string;
   };
 }
 
@@ -288,6 +289,9 @@ export interface RemoteSSHConnectionOptions {
   host: string;
   port: number;
   userName?: string;
+  privateKey?: string;
+  privateKeyPassphrase?: string;
+  certificate?: string;
 }
 
 export interface IRemoteSSHIntegration {

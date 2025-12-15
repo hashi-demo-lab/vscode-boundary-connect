@@ -73,7 +73,21 @@
       "Bash(boundary targets list:*)",
       "WebSearch",
       "WebFetch(domain:code.visualstudio.com)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(code:*)",
+      "Bash(boundary authenticate oidc:*)",
+      "Bash(gh issue view:*)",
+      "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true boundary targets list:*)",
+      "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true boundary config get-token:*)",
+      "Bash(npx tsc:*)",
+      "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true boundary scopes list:*)",
+      "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true /opt/homebrew/bin/boundary scopes list:*)",
+      "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true /opt/homebrew/bin/boundary targets list:*)",
+      "Bash(gh run view:*)",
+      "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true /opt/homebrew/bin/boundary roles list:*)",
+      "Bash(jq -r \".items[] | \"\"\\(.id) - \\(.name)\"\"\")",
+      "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true /opt/homebrew/bin/boundary users list:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": [
       "Write(.gitignore)",
