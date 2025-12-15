@@ -34,6 +34,7 @@ import {
   parseSessionAuthResponse,
   parseTargetsResponse,
 } from './parser';
+import { BoundaryAPI } from './api';
 
 const execFileAsync = promisify(execFile);
 
@@ -55,6 +56,8 @@ export class BoundaryCLI implements IBoundaryCLI {
   private cliPathResolutionFailed = false;
   private configChangeSubscription: vscode.Disposable | undefined;
   private readonly configService: IConfigurationService;
+  private readonly api: BoundaryAPI;
+  private cachedToken: string | undefined;
 
   /**
    * Create a new BoundaryCLI instance
@@ -63,6 +66,7 @@ export class BoundaryCLI implements IBoundaryCLI {
   constructor(config?: IConfigurationService) {
     // Use provided config or fall back to singleton for backward compatibility
     this.configService = config ?? getConfigurationService();
+    this.api = new BoundaryAPI(this.configService);
 
     // Listen for config changes to reset CLI path resolution
     this.configChangeSubscription = vscode.workspace.onDidChangeConfiguration(e => {
@@ -73,6 +77,30 @@ export class BoundaryCLI implements IBoundaryCLI {
         this.resolvedCliPath = undefined;
       }
     });
+  }
+
+  /**
+   * Ensure API client has current auth token
+   * Fetches from CLI keyring if not cached
+   */
+  private async ensureApiToken(): Promise<void> {
+    if (!this.cachedToken) {
+      const tokenResult = await this.getToken();
+      if (tokenResult.status === 'found') {
+        this.cachedToken = tokenResult.token;
+        this.api.setToken(tokenResult.token);
+      }
+    } else {
+      this.api.setToken(this.cachedToken);
+    }
+  }
+
+  /**
+   * Clear cached token (call on logout or auth failure)
+   */
+  clearCachedToken(): void {
+    this.cachedToken = undefined;
+    this.api.setToken(undefined);
   }
 
   private get cliPath(): string {
@@ -222,6 +250,8 @@ export class BoundaryCLI implements IBoundaryCLI {
       // Boundary CLI supports BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD env var
       try {
         const result = await this.executeWithPassword(args, pwdCreds.password);
+        // Clear cached token so we fetch the new one for API calls
+        this.clearCachedToken();
         return parseAuthResponse(result.stdout);
       } catch (error) {
         if (error instanceof BoundaryError) {
@@ -250,6 +280,8 @@ export class BoundaryCLI implements IBoundaryCLI {
       const result = await this.execute(args, timeout);
       logger.info('Auth command completed successfully');
       logger.debug('Auth result stdout:', result.stdout.substring(0, 500));
+      // Clear cached token so we fetch the new one for API calls
+      this.clearCachedToken();
       return parseAuthResponse(result.stdout);
     } catch (error) {
       logger.error('Auth error:', error);
@@ -354,12 +386,11 @@ export class BoundaryCLI implements IBoundaryCLI {
    * List auth methods from a specific scope
    */
   private async listAuthMethodsFromScope(scopeId: string): Promise<BoundaryAuthMethod[]> {
-    const args = ['auth-methods', 'list', '-format', 'json', '-scope-id', scopeId, ...this.getKeyringArgs()];
     logger.debug(`listAuthMethodsFromScope: scopeId=${scopeId}`);
 
     try {
-      const result = await this.execute(args, 10000);
-      return parseAuthMethodsResponse(result.stdout);
+      await this.ensureApiToken();
+      return await this.api.listAuthMethods(scopeId);
     } catch (err) {
       logger.debug(`No auth methods in scope ${scopeId}:`, err);
       return [];
@@ -408,28 +439,18 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async listScopes(parentScopeId?: string): Promise<BoundaryScope[]> {
-    const args = ['scopes', 'list', '-format', 'json', ...this.getKeyringArgs()];
-    if (parentScopeId) {
-      args.push('-scope-id', parentScopeId);
-    }
-
-    const result = await this.execute(args);
-    return parseScopesResponse(result.stdout);
+    // Use API for faster queries
+    await this.ensureApiToken();
+    return this.api.listScopes(parentScopeId || 'global');
   }
 
   /**
-   * List targets from a specific scope
+   * List targets from a specific scope (uses API for speed)
    */
   private async listTargetsFromScope(scopeId: string, recursive = true): Promise<BoundaryTarget[]> {
-    const args = ['targets', 'list', '-format', 'json', ...this.getKeyringArgs()];
-    args.push('-scope-id', scopeId);
-    if (recursive) {
-      args.push('-recursive');
-    }
-
     try {
-      const result = await this.execute(args);
-      return parseTargetsResponse(result.stdout);
+      await this.ensureApiToken();
+      return await this.api.listTargets(scopeId, recursive);
     } catch (err) {
       logger.debug(`No targets accessible from scope ${scopeId}:`, err);
       return [];
@@ -527,9 +548,9 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async authorizeSession(targetId: string): Promise<SessionAuthorization> {
-    const args = ['targets', 'authorize-session', '-id', targetId, '-format', 'json', ...this.getKeyringArgs()];
-    const result = await this.execute(args);
-    return parseSessionAuthResponse(result.stdout);
+    // Use API for faster session authorization
+    await this.ensureApiToken();
+    return this.api.authorizeSession(targetId);
   }
 
   async connect(targetId: string, options: ConnectOptions = {}): Promise<Connection> {
