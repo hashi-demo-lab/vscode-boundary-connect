@@ -440,6 +440,8 @@ export class BoundaryCLI implements IBoundaryCLI {
    * Discover all targets the user has access to
    * If scopeId is provided, lists from that scope only (for testing/advanced use)
    * Otherwise, searches global, orgs, and projects for accessible targets
+   *
+   * Performance: Uses parallel CLI calls to minimize discovery time
    */
   async listTargets(scopeId?: string): Promise<BoundaryTarget[]> {
     // If specific scope provided, use it directly (for backward compatibility and testing)
@@ -461,42 +463,63 @@ export class BoundaryCLI implements IBoundaryCLI {
       }
     };
 
-    // Try global scope first (works if user has broad permissions)
-    const globalTargets = await this.listTargetsFromScope('global', true);
+    // Phase 1: Try global scope with recursive (fastest if user has permissions)
+    // Run in parallel with listing org scopes
+    const [globalTargets, orgScopes] = await Promise.all([
+      this.listTargetsFromScope('global', true).catch(() => [] as BoundaryTarget[]),
+      this.listScopes('global').catch(() => [] as BoundaryScope[]),
+    ]);
+
     addTargets(globalTargets);
     if (globalTargets.length > 0) {
       logger.info(`Found ${globalTargets.length} targets from global scope`);
     }
 
-    // Discover org and project scopes and try each
-    try {
-      const orgScopes = await this.listScopes('global');
-      logger.info(`Searching ${orgScopes.length} org scopes for targets...`);
+    // If global recursive found targets, we likely have them all
+    // But still check orgs in parallel for completeness
+    if (orgScopes.length > 0) {
+      logger.info(`Searching ${orgScopes.length} org scopes for targets (parallel)...`);
 
-      for (const org of orgScopes) {
-        // Try org scope
-        const orgTargets = await this.listTargetsFromScope(org.id, true);
+      // Phase 2: List targets from all orgs AND list projects from all orgs - IN PARALLEL
+      const orgPromises = orgScopes.map(async (org) => {
+        const [orgTargets, projectScopes] = await Promise.all([
+          this.listTargetsFromScope(org.id, true).catch(() => [] as BoundaryTarget[]),
+          this.listScopes(org.id).catch(() => [] as BoundaryScope[]),
+        ]);
+        return { org, orgTargets, projectScopes };
+      });
+
+      const orgResults = await Promise.all(orgPromises);
+
+      // Collect org targets
+      for (const { org, orgTargets } of orgResults) {
         addTargets(orgTargets);
         if (orgTargets.length > 0) {
           logger.info(`Found ${orgTargets.length} targets in org "${org.name}"`);
         }
+      }
 
-        // Try project scopes within org
-        try {
-          const projectScopes = await this.listScopes(org.id);
-          for (const project of projectScopes) {
-            const projectTargets = await this.listTargetsFromScope(project.id, false);
-            addTargets(projectTargets);
-            if (projectTargets.length > 0) {
-              logger.info(`Found ${projectTargets.length} targets in project "${project.name}"`);
-            }
-          }
-        } catch {
-          // Skip if can't list projects
+      // Phase 3: List targets from all projects - IN PARALLEL
+      const projectPromises: Promise<{ project: BoundaryScope; targets: BoundaryTarget[] }>[] = [];
+      for (const { projectScopes } of orgResults) {
+        for (const project of projectScopes) {
+          projectPromises.push(
+            this.listTargetsFromScope(project.id, false)
+              .then(targets => ({ project, targets }))
+              .catch(() => ({ project, targets: [] as BoundaryTarget[] }))
+          );
         }
       }
-    } catch (err) {
-      logger.warn('Failed to discover scopes:', err);
+
+      if (projectPromises.length > 0) {
+        const projectResults = await Promise.all(projectPromises);
+        for (const { project, targets } of projectResults) {
+          addTargets(targets);
+          if (targets.length > 0) {
+            logger.info(`Found ${targets.length} targets in project "${project.name}"`);
+          }
+        }
+      }
     }
 
     logger.info(`Total targets discovered: ${allTargets.length}`);
