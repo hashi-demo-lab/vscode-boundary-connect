@@ -209,7 +209,10 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async authenticate(method: AuthMethod, credentials?: Credentials): Promise<AuthResult> {
-    const args = ['authenticate', method, '-format', 'json', ...this.getKeyringArgs()];
+    // Note: OIDC auth doesn't support -format json well - it outputs text
+    // Only use -format json for password auth where we need to parse the response
+    const useJsonFormat = method === 'password';
+    const args = ['authenticate', method, ...(useJsonFormat ? ['-format', 'json'] : []), ...this.getKeyringArgs()];
 
     if (method === 'password' && credentials) {
       const pwdCreds = credentials as PasswordCredentials;
@@ -328,7 +331,7 @@ export class BoundaryCLI implements IBoundaryCLI {
 
   async getToken(): Promise<TokenResult> {
     try {
-      const result = await this.execute(['config', 'get-token']);
+      const result = await this.execute(['config', 'get-token', ...this.getKeyringArgs()]);
       const token = result.stdout.trim();
       if (token) {
         return { status: 'found', token };
@@ -351,7 +354,7 @@ export class BoundaryCLI implements IBoundaryCLI {
    * List auth methods from a specific scope
    */
   private async listAuthMethodsFromScope(scopeId: string): Promise<BoundaryAuthMethod[]> {
-    const args = ['auth-methods', 'list', '-format', 'json', '-scope-id', scopeId];
+    const args = ['auth-methods', 'list', '-format', 'json', '-scope-id', scopeId, ...this.getKeyringArgs()];
     logger.debug(`listAuthMethodsFromScope: scopeId=${scopeId}`);
 
     try {
@@ -640,6 +643,15 @@ export class BoundaryCLI implements IBoundaryCLI {
     const trimmed = errorOutput.trim();
     let message = trimmed;
     let code = BoundaryErrorCode.CLI_EXECUTION_FAILED;
+
+    // Check for "no token found" in stderr - this means user needs to authenticate
+    // The CLI outputs this before making API calls when there's no saved token
+    if (trimmed.includes('no token found') || trimmed.includes('No saved credential found')) {
+      return {
+        message: 'Not authenticated. Please log in to Boundary.',
+        code: BoundaryErrorCode.AUTH_FAILED
+      };
+    }
 
     // Check if it's JSON (Boundary API error response)
     if (trimmed.startsWith('{')) {
