@@ -72,10 +72,18 @@ function getBoundaryKeysDir(): string {
 }
 
 /**
- * Save a brokered private key to a temporary file
+ * Save a brokered private key (and optionally certificate) to temporary files
  * Returns the path to the key file
+ *
+ * For Vault SSH key signing, the certificate must be saved as <keyname>-cert.pub
+ * alongside the private key for SSH to automatically use it.
  */
-async function saveBrokeredKey(port: number, targetName: string | undefined, privateKey: string): Promise<string> {
+async function saveBrokeredKey(
+  port: number,
+  targetName: string | undefined,
+  privateKey: string,
+  certificate?: string
+): Promise<string> {
   const keysDir = getBoundaryKeysDir();
   const hostAlias = generateBoundaryHostAlias(port, targetName);
   const keyPath = path.join(keysDir, `${hostAlias}.pem`);
@@ -91,21 +99,37 @@ async function saveBrokeredKey(port: number, targetName: string | undefined, pri
   await fs.promises.writeFile(keyPath, privateKey, { mode: 0o600 });
   logger.info(`Saved brokered SSH key to ${keyPath}`);
 
+  // Save certificate if provided (for Vault SSH key signing)
+  // SSH expects the certificate at <keyfile>-cert.pub
+  if (certificate) {
+    const certPath = keyPath.replace('.pem', '.pem-cert.pub');
+    await fs.promises.writeFile(certPath, certificate, { mode: 0o600 });
+    logger.info(`Saved brokered SSH certificate to ${certPath}`);
+  }
+
   return keyPath;
 }
 
 /**
- * Remove a brokered key file
+ * Remove a brokered key file and its certificate
  */
 async function removeBrokeredKey(port: number, targetName?: string): Promise<void> {
   const hostAlias = generateBoundaryHostAlias(port, targetName);
   const keyPath = path.join(getBoundaryKeysDir(), `${hostAlias}.pem`);
+  const certPath = keyPath.replace('.pem', '.pem-cert.pub');
 
   try {
     await fs.promises.unlink(keyPath);
     logger.debug(`Removed brokered key: ${keyPath}`);
   } catch {
     // Key may not exist, that's fine
+  }
+
+  try {
+    await fs.promises.unlink(certPath);
+    logger.debug(`Removed brokered certificate: ${certPath}`);
+  } catch {
+    // Certificate may not exist, that's fine
   }
 }
 
@@ -277,15 +301,27 @@ export async function triggerRemoteSSH(options: RemoteSSHConnectionOptions & { t
     await extension.activate();
   }
 
-  // Save brokered private key if provided
+  // Save brokered private key (and certificate) if provided
   let keyPath: string | undefined;
+  logger.debug('triggerRemoteSSH options:', {
+    host: options.host,
+    port: options.port,
+    userName: options.userName,
+    hasPrivateKey: !!options.privateKey,
+    privateKeyLength: options.privateKey?.length,
+    hasCertificate: !!options.certificate,
+    certificateLength: options.certificate?.length
+  });
   if (options.privateKey) {
     try {
-      keyPath = await saveBrokeredKey(options.port, options.targetName, options.privateKey);
+      keyPath = await saveBrokeredKey(options.port, options.targetName, options.privateKey, options.certificate);
+      logger.info(`Saved brokered key to: ${keyPath}${options.certificate ? ' (with certificate)' : ''}`);
     } catch (err) {
       logger.error('Failed to save brokered SSH key:', err);
       // Continue without the key - SSH may still work with agent or other auth
     }
+  } else {
+    logger.debug('No privateKey provided to triggerRemoteSSH');
   }
 
   // Create SSH config entry for this connection

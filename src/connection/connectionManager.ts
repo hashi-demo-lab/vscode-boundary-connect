@@ -46,13 +46,24 @@ export class ConnectionManager implements IConnectionManager {
     let userName: string | undefined;
     let privateKey: string | undefined;
     let privateKeyPassphrase: string | undefined;
+    let certificate: string | undefined;
 
     try {
       const authz = await this.cli.authorizeSession(target.id);
+      logger.debug('authorize-session response:', {
+        hasCredentials: !!authz.credentials,
+        credentialCount: authz.credentials?.length
+      });
       if (authz.credentials && authz.credentials.length > 0) {
         brokeredCredentials = authz.credentials;
         // Use credentials from first brokered credential
         const cred = brokeredCredentials[0];
+        logger.debug('First credential:', {
+          hasCredential: !!cred.credential,
+          hasUsername: !!cred.credential?.username,
+          hasPrivateKey: !!cred.credential?.privateKey,
+          credentialKeys: cred.credential ? Object.keys(cred.credential) : []
+        });
         if (cred.credential.username) {
           userName = cred.credential.username;
           logger.info(`Using brokered username: ${userName}`);
@@ -61,6 +72,12 @@ export class ConnectionManager implements IConnectionManager {
           privateKey = cred.credential.privateKey;
           privateKeyPassphrase = cred.credential.privateKeyPassphrase;
           logger.info('Using brokered SSH private key');
+        } else {
+          logger.warn('No privateKey in brokered credential');
+        }
+        if (cred.credential.certificate) {
+          certificate = cred.credential.certificate;
+          logger.info('Using brokered SSH certificate (Vault key signing)');
         }
       }
     } catch (error) {
@@ -109,6 +126,7 @@ export class ConnectionManager implements IConnectionManager {
           userName: userName || undefined,
           privateKey: privateKey,
           privateKeyPassphrase: privateKeyPassphrase,
+          certificate: certificate,
           targetName: target.name,
         });
       } catch (error) {

@@ -117,13 +117,15 @@ const CredentialSchema = z.object({
 });
 
 // Vault-generic credentials use secret.decoded.data structure
+// Supports Vault SSH secrets engine with key signing
 const VaultSecretDataSchema = z.object({
   username: z.string().optional(),
   password: z.string().optional(),
   private_key: z.string().optional(),
   private_key_passphrase: z.string().optional(),
-  certificate: z.string().optional(),
+  certificate: z.string().optional(),  // SSH signed certificate from Vault
   public_key: z.string().optional(),
+  signed_key: z.string().optional(),   // Alternative field name for certificate
 }).passthrough(); // Allow additional fields
 
 const VaultSecretSchema = z.object({
@@ -532,6 +534,8 @@ export function parseSessionAuthResponse(output: string): SessionAuthorization {
     const password = vaultCred?.password || staticCred?.password;
     const privateKey = vaultCred?.private_key || staticCred?.private_key;
     const privateKeyPassphrase = vaultCred?.private_key_passphrase || staticCred?.private_key_passphrase;
+    // Certificate from Vault SSH secrets engine (key signing)
+    const certificate = vaultCred?.certificate || vaultCred?.signed_key;
 
     return {
       credentialSource: {
@@ -546,6 +550,7 @@ export function parseSessionAuthResponse(output: string): SessionAuthorization {
         password,
         privateKey,
         privateKeyPassphrase,
+        certificate,
       },
     };
   });
