@@ -28,12 +28,9 @@ import { IConfigurationService } from '../types';
 import {
   extractPort,
   extractVersion,
-  parseAuthMethodsResponse,
   parseAuthResponse,
-  parseScopesResponse,
-  parseSessionAuthResponse,
-  parseTargetsResponse,
 } from './parser';
+import { BoundaryAPI } from './api';
 
 const execFileAsync = promisify(execFile);
 
@@ -55,6 +52,8 @@ export class BoundaryCLI implements IBoundaryCLI {
   private cliPathResolutionFailed = false;
   private configChangeSubscription: vscode.Disposable | undefined;
   private readonly configService: IConfigurationService;
+  private readonly api: BoundaryAPI;
+  private cachedToken: string | undefined;
 
   /**
    * Create a new BoundaryCLI instance
@@ -63,6 +62,7 @@ export class BoundaryCLI implements IBoundaryCLI {
   constructor(config?: IConfigurationService) {
     // Use provided config or fall back to singleton for backward compatibility
     this.configService = config ?? getConfigurationService();
+    this.api = new BoundaryAPI(this.configService);
 
     // Listen for config changes to reset CLI path resolution
     this.configChangeSubscription = vscode.workspace.onDidChangeConfiguration(e => {
@@ -73,6 +73,30 @@ export class BoundaryCLI implements IBoundaryCLI {
         this.resolvedCliPath = undefined;
       }
     });
+  }
+
+  /**
+   * Ensure API client has current auth token
+   * Fetches from CLI keyring if not cached
+   */
+  private async ensureApiToken(): Promise<void> {
+    if (!this.cachedToken) {
+      const tokenResult = await this.getToken();
+      if (tokenResult.status === 'found') {
+        this.cachedToken = tokenResult.token;
+        this.api.setToken(tokenResult.token);
+      }
+    } else {
+      this.api.setToken(this.cachedToken);
+    }
+  }
+
+  /**
+   * Clear cached token (call on logout or auth failure)
+   */
+  clearCachedToken(): void {
+    this.cachedToken = undefined;
+    this.api.setToken(undefined);
   }
 
   private get cliPath(): string {
@@ -209,7 +233,10 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async authenticate(method: AuthMethod, credentials?: Credentials): Promise<AuthResult> {
-    const args = ['authenticate', method, '-format', 'json', ...this.getKeyringArgs()];
+    // Note: OIDC auth doesn't support -format json well - it outputs text
+    // Only use -format json for password auth where we need to parse the response
+    const useJsonFormat = method === 'password';
+    const args = ['authenticate', method, ...(useJsonFormat ? ['-format', 'json'] : []), ...this.getKeyringArgs()];
 
     if (method === 'password' && credentials) {
       const pwdCreds = credentials as PasswordCredentials;
@@ -219,6 +246,8 @@ export class BoundaryCLI implements IBoundaryCLI {
       // Boundary CLI supports BOUNDARY_AUTHENTICATE_PASSWORD_PASSWORD env var
       try {
         const result = await this.executeWithPassword(args, pwdCreds.password);
+        // Clear cached token so we fetch the new one for API calls
+        this.clearCachedToken();
         return parseAuthResponse(result.stdout);
       } catch (error) {
         if (error instanceof BoundaryError) {
@@ -238,17 +267,25 @@ export class BoundaryCLI implements IBoundaryCLI {
     const timeout = method === 'oidc' ? 300000 : 30000;
 
     const env = this.getCliEnv();
-    logger.info(`Executing authenticate: ${method}`);
+    logger.info(`=== CLI AUTHENTICATE START ===`);
+    logger.info(`Method: ${method}`);
+    logger.info(`CLI path: ${this.cliPath}`);
     logger.info(`CLI args: ${args.join(' ')}`);
     logger.info(`BOUNDARY_ADDR: ${env.BOUNDARY_ADDR || '(not set)'}`);
     logger.info(`BOUNDARY_TLS_INSECURE: ${env.BOUNDARY_TLS_INSECURE || '(not set)'}`);
+    logger.info(`Timeout: ${timeout}ms`);
 
     try {
+      logger.info('Calling this.execute()...');
       const result = await this.execute(args, timeout);
+      logger.info('=== CLI AUTHENTICATE SUCCESS ===');
       logger.info('Auth command completed successfully');
       logger.debug('Auth result stdout:', result.stdout.substring(0, 500));
+      // Clear cached token so we fetch the new one for API calls
+      this.clearCachedToken();
       return parseAuthResponse(result.stdout);
     } catch (error) {
+      logger.error('=== CLI AUTHENTICATE ERROR ===');
       logger.error('Auth error:', error);
       if (error instanceof BoundaryError) {
         return { success: false, error: error.message };
@@ -328,7 +365,7 @@ export class BoundaryCLI implements IBoundaryCLI {
 
   async getToken(): Promise<TokenResult> {
     try {
-      const result = await this.execute(['config', 'get-token']);
+      const result = await this.execute(['config', 'get-token', ...this.getKeyringArgs()]);
       const token = result.stdout.trim();
       if (token) {
         return { status: 'found', token };
@@ -351,14 +388,24 @@ export class BoundaryCLI implements IBoundaryCLI {
    * List auth methods from a specific scope
    */
   private async listAuthMethodsFromScope(scopeId: string): Promise<BoundaryAuthMethod[]> {
-    const args = ['auth-methods', 'list', '-format', 'json', '-scope-id', scopeId];
     logger.debug(`listAuthMethodsFromScope: scopeId=${scopeId}`);
 
     try {
-      const result = await this.execute(args, 10000);
-      return parseAuthMethodsResponse(result.stdout);
+      await this.ensureApiToken();
+      return await this.api.listAuthMethods(scopeId);
     } catch (err) {
-      logger.debug(`No auth methods in scope ${scopeId}:`, err);
+      // Classify error to determine appropriate log level
+      if (err instanceof BoundaryError) {
+        if (err.code === BoundaryErrorCode.AUTH_FAILED) {
+          // Permission denied is expected - user may not have access to this scope
+          logger.debug(`No permission to list auth methods in scope ${scopeId}`);
+        } else {
+          // Other errors (network, server, etc.) should be visible
+          logger.warn(`Failed to list auth methods from scope ${scopeId}:`, err.message);
+        }
+      } else {
+        logger.warn(`Unexpected error listing auth methods from scope ${scopeId}:`, err);
+      }
       return [];
     }
   }
@@ -405,30 +452,31 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async listScopes(parentScopeId?: string): Promise<BoundaryScope[]> {
-    const args = ['scopes', 'list', '-format', 'json', ...this.getKeyringArgs()];
-    if (parentScopeId) {
-      args.push('-scope-id', parentScopeId);
-    }
-
-    const result = await this.execute(args);
-    return parseScopesResponse(result.stdout);
+    // Use API for faster queries
+    await this.ensureApiToken();
+    return this.api.listScopes(parentScopeId || 'global');
   }
 
   /**
-   * List targets from a specific scope
+   * List targets from a specific scope (uses API for speed)
    */
   private async listTargetsFromScope(scopeId: string, recursive = true): Promise<BoundaryTarget[]> {
-    const args = ['targets', 'list', '-format', 'json', ...this.getKeyringArgs()];
-    args.push('-scope-id', scopeId);
-    if (recursive) {
-      args.push('-recursive');
-    }
-
     try {
-      const result = await this.execute(args);
-      return parseTargetsResponse(result.stdout);
+      await this.ensureApiToken();
+      return await this.api.listTargets(scopeId, recursive);
     } catch (err) {
-      logger.debug(`No targets accessible from scope ${scopeId}:`, err);
+      // Classify error to determine appropriate log level
+      if (err instanceof BoundaryError) {
+        if (err.code === BoundaryErrorCode.AUTH_FAILED) {
+          // Permission denied is expected - user may not have access to this scope
+          logger.debug(`No permission to list targets from scope ${scopeId}`);
+        } else {
+          // Other errors (network, server, etc.) should be visible
+          logger.warn(`Failed to list targets from scope ${scopeId}:`, err.message);
+        }
+      } else {
+        logger.warn(`Unexpected error listing targets from scope ${scopeId}:`, err);
+      }
       return [];
     }
   }
@@ -437,6 +485,8 @@ export class BoundaryCLI implements IBoundaryCLI {
    * Discover all targets the user has access to
    * If scopeId is provided, lists from that scope only (for testing/advanced use)
    * Otherwise, searches global, orgs, and projects for accessible targets
+   *
+   * Performance: Uses parallel CLI calls to minimize discovery time
    */
   async listTargets(scopeId?: string): Promise<BoundaryTarget[]> {
     // If specific scope provided, use it directly (for backward compatibility and testing)
@@ -458,42 +508,78 @@ export class BoundaryCLI implements IBoundaryCLI {
       }
     };
 
-    // Try global scope first (works if user has broad permissions)
-    const globalTargets = await this.listTargetsFromScope('global', true);
+    // Phase 1: Try global scope with recursive (fastest if user has permissions)
+    // Run in parallel with listing org scopes
+    const [globalTargets, orgScopes] = await Promise.all([
+      this.listTargetsFromScope('global', true).catch(err => {
+        logger.warn('Failed to list targets from global scope:', err instanceof Error ? err.message : err);
+        return [] as BoundaryTarget[];
+      }),
+      this.listScopes('global').catch(err => {
+        logger.warn('Failed to list org scopes from global:', err instanceof Error ? err.message : err);
+        return [] as BoundaryScope[];
+      }),
+    ]);
+
     addTargets(globalTargets);
     if (globalTargets.length > 0) {
       logger.info(`Found ${globalTargets.length} targets from global scope`);
     }
 
-    // Discover org and project scopes and try each
-    try {
-      const orgScopes = await this.listScopes('global');
-      logger.info(`Searching ${orgScopes.length} org scopes for targets...`);
+    // If global recursive found targets, we likely have them all
+    // But still check orgs in parallel for completeness
+    if (orgScopes.length > 0) {
+      logger.info(`Searching ${orgScopes.length} org scopes for targets (parallel)...`);
 
-      for (const org of orgScopes) {
-        // Try org scope
-        const orgTargets = await this.listTargetsFromScope(org.id, true);
+      // Phase 2: List targets from all orgs AND list projects from all orgs - IN PARALLEL
+      const orgPromises = orgScopes.map(async (org) => {
+        const [orgTargets, projectScopes] = await Promise.all([
+          this.listTargetsFromScope(org.id, true).catch(err => {
+            logger.warn(`Failed to list targets from org "${org.name}":`, err instanceof Error ? err.message : err);
+            return [] as BoundaryTarget[];
+          }),
+          this.listScopes(org.id).catch(err => {
+            logger.warn(`Failed to list project scopes from org "${org.name}":`, err instanceof Error ? err.message : err);
+            return [] as BoundaryScope[];
+          }),
+        ]);
+        return { org, orgTargets, projectScopes };
+      });
+
+      const orgResults = await Promise.all(orgPromises);
+
+      // Collect org targets
+      for (const { org, orgTargets } of orgResults) {
         addTargets(orgTargets);
         if (orgTargets.length > 0) {
           logger.info(`Found ${orgTargets.length} targets in org "${org.name}"`);
         }
+      }
 
-        // Try project scopes within org
-        try {
-          const projectScopes = await this.listScopes(org.id);
-          for (const project of projectScopes) {
-            const projectTargets = await this.listTargetsFromScope(project.id, false);
-            addTargets(projectTargets);
-            if (projectTargets.length > 0) {
-              logger.info(`Found ${projectTargets.length} targets in project "${project.name}"`);
-            }
-          }
-        } catch {
-          // Skip if can't list projects
+      // Phase 3: List targets from all projects - IN PARALLEL
+      const projectPromises: Promise<{ project: BoundaryScope; targets: BoundaryTarget[] }>[] = [];
+      for (const { projectScopes } of orgResults) {
+        for (const project of projectScopes) {
+          projectPromises.push(
+            this.listTargetsFromScope(project.id, false)
+              .then(targets => ({ project, targets }))
+              .catch(err => {
+                logger.warn(`Failed to list targets from project "${project.name}":`, err instanceof Error ? err.message : err);
+                return { project, targets: [] as BoundaryTarget[] };
+              })
+          );
         }
       }
-    } catch (err) {
-      logger.warn('Failed to discover scopes:', err);
+
+      if (projectPromises.length > 0) {
+        const projectResults = await Promise.all(projectPromises);
+        for (const { project, targets } of projectResults) {
+          addTargets(targets);
+          if (targets.length > 0) {
+            logger.info(`Found ${targets.length} targets in project "${project.name}"`);
+          }
+        }
+      }
     }
 
     logger.info(`Total targets discovered: ${allTargets.length}`);
@@ -501,9 +587,9 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async authorizeSession(targetId: string): Promise<SessionAuthorization> {
-    const args = ['targets', 'authorize-session', '-id', targetId, '-format', 'json', ...this.getKeyringArgs()];
-    const result = await this.execute(args);
-    return parseSessionAuthResponse(result.stdout);
+    // Use API for faster session authorization
+    await this.ensureApiToken();
+    return this.api.authorizeSession(targetId);
   }
 
   async connect(targetId: string, options: ConnectOptions = {}): Promise<Connection> {
@@ -640,6 +726,15 @@ export class BoundaryCLI implements IBoundaryCLI {
     const trimmed = errorOutput.trim();
     let message = trimmed;
     let code = BoundaryErrorCode.CLI_EXECUTION_FAILED;
+
+    // Check for "no token found" in stderr - this means user needs to authenticate
+    // The CLI outputs this before making API calls when there's no saved token
+    if (trimmed.includes('no token found') || trimmed.includes('No saved credential found')) {
+      return {
+        message: 'Not authenticated. Please log in to Boundary.',
+        code: BoundaryErrorCode.AUTH_FAILED
+      };
+    }
 
     // Check if it's JSON (Boundary API error response)
     if (trimmed.startsWith('{')) {

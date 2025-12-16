@@ -87,7 +87,10 @@
       "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true /opt/homebrew/bin/boundary roles list:*)",
       "Bash(jq -r \".items[] | \"\"\\(.id) - \\(.name)\"\"\")",
       "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true /opt/homebrew/bin/boundary users list:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(ssh:*)",
+      "Bash(BOUNDARY_ADDR=https://boundary.local BOUNDARY_TLS_INSECURE=true /opt/homebrew/bin/boundary targets authorize-session:*)",
+      "WebFetch(domain:developer.hashicorp.com)"
     ],
     "deny": [
       "Write(.gitignore)",

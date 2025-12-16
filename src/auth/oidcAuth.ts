@@ -182,23 +182,42 @@ export async function executeOidcAuth(
   const cli = getBoundaryCLI();
 
   // Check CLI availability first
-  logger.info('Checking CLI installation...');
-  const installed = await cli.checkInstalled();
+  logger.info('Step 1: Checking CLI installation...');
+  let installed: boolean;
+  try {
+    installed = await cli.checkInstalled();
+  } catch (err) {
+    logger.error('Step 1 ERROR: CLI check threw:', err);
+    void vscode.window.showErrorMessage(`CLI check failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { success: false, error: String(err) };
+  }
+
   if (!installed) {
-    logger.error('CLI not installed');
+    logger.error('Step 1 FAILED: CLI not installed');
     void vscode.window.showErrorMessage('Boundary CLI not found. Please install it.');
     return {
       success: false,
       error: 'Boundary CLI not found. Please install it from https://developer.hashicorp.com/boundary/downloads',
     };
   }
-  logger.info('CLI is installed');
+  logger.info('Step 1: CLI is installed ✓');
 
   // Ensure Boundary address is configured
-  const hasAddress = await ensureBoundaryAddress();
+  logger.info('Step 2: Checking Boundary address...');
+  let hasAddress: boolean;
+  try {
+    hasAddress = await ensureBoundaryAddress();
+  } catch (err) {
+    logger.error('Step 2 ERROR: Address check threw:', err);
+    void vscode.window.showErrorMessage(`Address check failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { success: false, error: String(err) };
+  }
+
   if (!hasAddress) {
+    logger.error('Step 2 FAILED: No Boundary address configured');
     return { success: false, error: 'Boundary server address is required' };
   }
+  logger.info('Step 2: Boundary address configured ✓');
 
   const config = getConfigurationService();
   logger.info(`Using Boundary address: ${config.get('addr')}, TLS insecure: ${config.get('tlsInsecure')}`);
@@ -207,29 +226,37 @@ export async function executeOidcAuth(
 
   // If no auth method specified, discover available methods
   if (!authMethodId) {
-    logger.info('Discovering auth methods from Boundary server...');
+    logger.info('Step 3: Discovering auth methods from Boundary server...');
 
     // Show progress while discovering auth methods
     let authMethods: BoundaryAuthMethod[] = [];
     let discoveryError: Error | undefined;
 
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: 'Discovering sign-in options...',
-        cancellable: false,
-      },
-      async () => {
-        try {
-          logger.info('Calling cli.listAuthMethods()...');
-          authMethods = await cli.listAuthMethods();
-          logger.info(`Discovered ${authMethods.length} auth methods: ${authMethods.map(m => m.name).join(', ')}`);
-        } catch (err) {
-          logger.error('Auth method discovery failed:', err);
-          discoveryError = err instanceof Error ? err : new Error(String(err));
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Discovering sign-in options...',
+          cancellable: false,
+        },
+        async () => {
+          try {
+            logger.info('Step 3: Calling cli.listAuthMethods()...');
+            authMethods = await cli.listAuthMethods();
+            logger.info(`Step 3: Discovered ${authMethods.length} auth methods: ${authMethods.map(m => m.name).join(', ')}`);
+          } catch (err) {
+            logger.error('Step 3 ERROR: Auth method discovery failed:', err);
+            discoveryError = err instanceof Error ? err : new Error(String(err));
+          }
         }
-      }
-    );
+      );
+    } catch (progressErr) {
+      logger.error('Step 3 ERROR: withProgress threw:', progressErr);
+      void vscode.window.showErrorMessage(`Discovery error: ${progressErr instanceof Error ? progressErr.message : String(progressErr)}`);
+      return { success: false, error: String(progressErr) };
+    }
+
+    logger.info(`Step 3 complete: ${authMethods.length} methods found, error: ${discoveryError?.message || 'none'}`);
 
     // If discovery failed and TLS is not disabled, offer to disable it
     if (authMethods.length === 0 && discoveryError) {
@@ -327,6 +354,7 @@ export async function executeOidcAuth(
   }
 
   const credentials: OidcCredentials = { authMethodId };
+  logger.info(`Step 4: Prepared OIDC credentials with authMethodId: ${authMethodId}`);
 
   // Show prominent message about checking browser
   void vscode.window.showWarningMessage(
@@ -334,17 +362,31 @@ export async function executeOidcAuth(
     'OK'
   );
 
+  logger.info('Step 5: Calling authManager.login...');
+
   // Show progress while OIDC auth is in progress
-  const result = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: 'Waiting for browser authentication...',
-      cancellable: false,
-    },
-    async () => {
-      return authManager.login('oidc', credentials);
-    }
-  );
+  let result: AuthResult;
+  try {
+    result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'Waiting for browser authentication...',
+        cancellable: false,
+      },
+      async () => {
+        logger.info('Step 5: Inside withProgress, calling authManager.login()...');
+        const loginResult = await authManager.login('oidc', credentials);
+        logger.info(`Step 5: authManager.login returned: success=${loginResult.success}, error=${loginResult.error || 'none'}`);
+        return loginResult;
+      }
+    );
+  } catch (err) {
+    logger.error('Step 5 ERROR: authManager.login threw:', err);
+    void vscode.window.showErrorMessage(`Login error: ${err instanceof Error ? err.message : String(err)}`);
+    return { success: false, error: String(err) };
+  }
+
+  logger.info(`Step 6: Login complete - success=${result.success}`);
 
   if (result.success) {
     void vscode.window.showInformationMessage('Successfully signed in to Boundary');
