@@ -198,6 +198,8 @@ function registerCommands(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('boundary.login', async () => {
       logger.info('boundary.login command invoked');
+      logger.show(); // Force show output channel
+      void vscode.window.showInformationMessage('Starting Boundary login...');
       const result = await executeOidcAuth(authManager);
 
       // Refresh targets after successful login

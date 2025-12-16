@@ -1,5 +1,5 @@
 {
-  "boundary.addr": "https://boundary.local",
+  "boundary.addr": "https://boundary.hashicorp.lab",
   "boundary.tlsInsecure": true,
   "boundary.defaultAuthMethod": "oidc",
   "boundary.logLevel": "debug",

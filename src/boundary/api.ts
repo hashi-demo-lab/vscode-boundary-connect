@@ -157,13 +157,15 @@ export class BoundaryAPI {
 
   /**
    * Make an HTTP request to the Boundary API
+   * @param allowUnauthenticated - If true, allows request without token (for auth-methods discovery)
    */
   private async request<T>(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
-    body?: unknown
+    body?: unknown,
+    allowUnauthenticated = false
   ): Promise<T> {
-    if (!this.token) {
+    if (!this.token && !allowUnauthenticated) {
       throw new BoundaryError(
         'Not authenticated. Please log in to Boundary.',
         BoundaryErrorCode.AUTH_FAILED
@@ -174,16 +176,22 @@ export class BoundaryAPI {
     const isHttps = url.protocol === 'https:';
     const httpModule = isHttps ? https : http;
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+
+    // Only add Authorization header if we have a token
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
     const options: https.RequestOptions = {
       method,
       hostname: url.hostname,
       port: url.port || (isHttps ? 443 : 80),
       path: url.pathname + url.search,
-      headers: {
-        'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      headers,
       timeout: 30000,
     };
 
@@ -305,15 +313,19 @@ export class BoundaryAPI {
 
   /**
    * List auth methods for a scope
+   * Note: This allows unauthenticated requests since it's needed during login flow
    */
   async listAuthMethods(scopeId: string = 'global'): Promise<BoundaryAuthMethod[]> {
     logger.debug(`API: Listing auth methods from ${scopeId}`);
     const startTime = Date.now();
 
     try {
+      // Allow unauthenticated - needed for login flow to discover auth methods
       const response = await this.request<ApiResponse<ApiAuthMethod>>(
         'GET',
-        `/v1/auth-methods?scope_id=${encodeURIComponent(scopeId)}`
+        `/v1/auth-methods?scope_id=${encodeURIComponent(scopeId)}`,
+        undefined,
+        true // allowUnauthenticated
       );
 
       const authMethods = (response.items || []).map(this.mapApiAuthMethod);

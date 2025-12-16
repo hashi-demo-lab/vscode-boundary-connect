@@ -52,16 +52,19 @@ export class ConnectionManager implements IConnectionManager {
       const authz = await this.cli.authorizeSession(target.id);
       logger.debug('authorize-session response:', {
         hasCredentials: !!authz.credentials,
-        credentialCount: authz.credentials?.length
+        credentialCount: authz.credentials?.length,
+        credentialsRaw: JSON.stringify(authz.credentials, null, 2)
       });
       if (authz.credentials && authz.credentials.length > 0) {
         brokeredCredentials = authz.credentials;
         // Use credentials from first brokered credential
         const cred = brokeredCredentials[0];
-        logger.debug('First credential:', {
+        logger.debug('First credential object:', JSON.stringify(cred, null, 2));
+        logger.debug('Credential field check:', {
           hasCredential: !!cred.credential,
           hasUsername: !!cred.credential?.username,
           hasPrivateKey: !!cred.credential?.privateKey,
+          hasCertificate: !!cred.credential?.certificate,
           credentialKeys: cred.credential ? Object.keys(cred.credential) : []
         });
         if (cred.credential.username) {
@@ -81,8 +84,24 @@ export class ConnectionManager implements IConnectionManager {
         }
       }
     } catch (error) {
-      // authorize-session is optional - continue without it
-      logger.debug('Could not get session authorization for credentials:', error);
+      // Classify error to determine appropriate log level and user notification
+      if (error instanceof Error) {
+        const errorMessage = error.message.toLowerCase();
+        // Check for expected "not supported" scenarios vs actual errors
+        if (errorMessage.includes('not found') || errorMessage.includes('no credentials')) {
+          // Target doesn't support brokered credentials - this is expected
+          logger.debug('Target does not support brokered credentials:', error.message);
+        } else if (errorMessage.includes('unauthorized') || errorMessage.includes('expired') || errorMessage.includes('auth')) {
+          // Auth issues - user should know their token may be expired
+          logger.warn('Session authorization failed - token may be expired:', error.message);
+        } else {
+          // Other errors (network, server, etc.) - log at warn level
+          logger.warn('Could not get session authorization for credentials:', error.message);
+        }
+      } else {
+        logger.warn('Unexpected error during session authorization:', error);
+      }
+      // Continue without brokered credentials - user will be prompted for username
     }
 
     // For SSH/TCP targets without brokered credentials, prompt for username
@@ -131,15 +150,20 @@ export class ConnectionManager implements IConnectionManager {
         });
       } catch (error) {
         logger.error('Failed to trigger Remote SSH:', error);
-        // Don't fail the connection, user can manually connect
-        void vscode.window.showInformationMessage(
-          `Connected to ${target.name} on localhost:${session.localPort}. ` +
-          `Use SSH: ssh ${userName ? userName + '@' : ''}localhost -p ${session.localPort}`,
-          'Copy Command'
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        // Show warning with reason for fallback so user understands why automatic connection failed
+        void vscode.window.showWarningMessage(
+          `Remote SSH auto-connect failed: ${errorMsg}. ` +
+          `Manual connection available on localhost:${session.localPort}.`,
+          'Copy SSH Command',
+          'View Logs'
         ).then(action => {
-          if (action === 'Copy Command') {
+          if (action === 'Copy SSH Command') {
             const cmd = `ssh ${userName ? userName + '@' : ''}localhost -p ${session.localPort}`;
             void vscode.env.clipboard.writeText(cmd);
+            void vscode.window.showInformationMessage('SSH command copied to clipboard');
+          } else if (action === 'View Logs') {
+            logger.show();
           }
         });
       }

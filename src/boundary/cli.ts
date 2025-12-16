@@ -267,19 +267,25 @@ export class BoundaryCLI implements IBoundaryCLI {
     const timeout = method === 'oidc' ? 300000 : 30000;
 
     const env = this.getCliEnv();
-    logger.info(`Executing authenticate: ${method}`);
+    logger.info(`=== CLI AUTHENTICATE START ===`);
+    logger.info(`Method: ${method}`);
+    logger.info(`CLI path: ${this.cliPath}`);
     logger.info(`CLI args: ${args.join(' ')}`);
     logger.info(`BOUNDARY_ADDR: ${env.BOUNDARY_ADDR || '(not set)'}`);
     logger.info(`BOUNDARY_TLS_INSECURE: ${env.BOUNDARY_TLS_INSECURE || '(not set)'}`);
+    logger.info(`Timeout: ${timeout}ms`);
 
     try {
+      logger.info('Calling this.execute()...');
       const result = await this.execute(args, timeout);
+      logger.info('=== CLI AUTHENTICATE SUCCESS ===');
       logger.info('Auth command completed successfully');
       logger.debug('Auth result stdout:', result.stdout.substring(0, 500));
       // Clear cached token so we fetch the new one for API calls
       this.clearCachedToken();
       return parseAuthResponse(result.stdout);
     } catch (error) {
+      logger.error('=== CLI AUTHENTICATE ERROR ===');
       logger.error('Auth error:', error);
       if (error instanceof BoundaryError) {
         return { success: false, error: error.message };
@@ -388,7 +394,18 @@ export class BoundaryCLI implements IBoundaryCLI {
       await this.ensureApiToken();
       return await this.api.listAuthMethods(scopeId);
     } catch (err) {
-      logger.debug(`No auth methods in scope ${scopeId}:`, err);
+      // Classify error to determine appropriate log level
+      if (err instanceof BoundaryError) {
+        if (err.code === BoundaryErrorCode.AUTH_FAILED) {
+          // Permission denied is expected - user may not have access to this scope
+          logger.debug(`No permission to list auth methods in scope ${scopeId}`);
+        } else {
+          // Other errors (network, server, etc.) should be visible
+          logger.warn(`Failed to list auth methods from scope ${scopeId}:`, err.message);
+        }
+      } else {
+        logger.warn(`Unexpected error listing auth methods from scope ${scopeId}:`, err);
+      }
       return [];
     }
   }
@@ -448,7 +465,18 @@ export class BoundaryCLI implements IBoundaryCLI {
       await this.ensureApiToken();
       return await this.api.listTargets(scopeId, recursive);
     } catch (err) {
-      logger.debug(`No targets accessible from scope ${scopeId}:`, err);
+      // Classify error to determine appropriate log level
+      if (err instanceof BoundaryError) {
+        if (err.code === BoundaryErrorCode.AUTH_FAILED) {
+          // Permission denied is expected - user may not have access to this scope
+          logger.debug(`No permission to list targets from scope ${scopeId}`);
+        } else {
+          // Other errors (network, server, etc.) should be visible
+          logger.warn(`Failed to list targets from scope ${scopeId}:`, err.message);
+        }
+      } else {
+        logger.warn(`Unexpected error listing targets from scope ${scopeId}:`, err);
+      }
       return [];
     }
   }
@@ -483,8 +511,14 @@ export class BoundaryCLI implements IBoundaryCLI {
     // Phase 1: Try global scope with recursive (fastest if user has permissions)
     // Run in parallel with listing org scopes
     const [globalTargets, orgScopes] = await Promise.all([
-      this.listTargetsFromScope('global', true).catch(() => [] as BoundaryTarget[]),
-      this.listScopes('global').catch(() => [] as BoundaryScope[]),
+      this.listTargetsFromScope('global', true).catch(err => {
+        logger.warn('Failed to list targets from global scope:', err instanceof Error ? err.message : err);
+        return [] as BoundaryTarget[];
+      }),
+      this.listScopes('global').catch(err => {
+        logger.warn('Failed to list org scopes from global:', err instanceof Error ? err.message : err);
+        return [] as BoundaryScope[];
+      }),
     ]);
 
     addTargets(globalTargets);
@@ -500,8 +534,14 @@ export class BoundaryCLI implements IBoundaryCLI {
       // Phase 2: List targets from all orgs AND list projects from all orgs - IN PARALLEL
       const orgPromises = orgScopes.map(async (org) => {
         const [orgTargets, projectScopes] = await Promise.all([
-          this.listTargetsFromScope(org.id, true).catch(() => [] as BoundaryTarget[]),
-          this.listScopes(org.id).catch(() => [] as BoundaryScope[]),
+          this.listTargetsFromScope(org.id, true).catch(err => {
+            logger.warn(`Failed to list targets from org "${org.name}":`, err instanceof Error ? err.message : err);
+            return [] as BoundaryTarget[];
+          }),
+          this.listScopes(org.id).catch(err => {
+            logger.warn(`Failed to list project scopes from org "${org.name}":`, err instanceof Error ? err.message : err);
+            return [] as BoundaryScope[];
+          }),
         ]);
         return { org, orgTargets, projectScopes };
       });
@@ -523,7 +563,10 @@ export class BoundaryCLI implements IBoundaryCLI {
           projectPromises.push(
             this.listTargetsFromScope(project.id, false)
               .then(targets => ({ project, targets }))
-              .catch(() => ({ project, targets: [] as BoundaryTarget[] }))
+              .catch(err => {
+                logger.warn(`Failed to list targets from project "${project.name}":`, err instanceof Error ? err.message : err);
+                return { project, targets: [] as BoundaryTarget[] };
+              })
           );
         }
       }

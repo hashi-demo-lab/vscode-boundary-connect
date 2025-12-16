@@ -121,15 +121,23 @@ async function removeBrokeredKey(port: number, targetName?: string): Promise<voi
   try {
     await fs.promises.unlink(keyPath);
     logger.debug(`Removed brokered key: ${keyPath}`);
-  } catch {
-    // Key may not exist, that's fine
+  } catch (err: unknown) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code !== 'ENOENT') {
+      // Only log if it's not a "file not found" error
+      logger.warn(`Failed to remove brokered key ${keyPath}:`, error.message);
+    }
   }
 
   try {
     await fs.promises.unlink(certPath);
     logger.debug(`Removed brokered certificate: ${certPath}`);
-  } catch {
-    // Certificate may not exist, that's fine
+  } catch (err: unknown) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code !== 'ENOENT') {
+      // Only log if it's not a "file not found" error
+      logger.warn(`Failed to remove brokered certificate ${certPath}:`, error.message);
+    }
   }
 }
 
@@ -318,6 +326,15 @@ export async function triggerRemoteSSH(options: RemoteSSHConnectionOptions & { t
       logger.info(`Saved brokered key to: ${keyPath}${options.certificate ? ' (with certificate)' : ''}`);
     } catch (err) {
       logger.error('Failed to save brokered SSH key:', err);
+      // Notify user that brokered key saving failed - they may need manual credentials
+      void vscode.window.showWarningMessage(
+        'Could not save brokered SSH key. You may need to provide credentials manually.',
+        'View Logs'
+      ).then(action => {
+        if (action === 'View Logs') {
+          logger.show();
+        }
+      });
       // Continue without the key - SSH may still work with agent or other auth
     }
   } else {

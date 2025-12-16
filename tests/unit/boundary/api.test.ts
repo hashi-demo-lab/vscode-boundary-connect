@@ -105,6 +105,22 @@ describe('BoundaryAPI', () => {
       // Subsequent calls should fail with auth error
       expect(api).toBeDefined();
     });
+
+    it('should use the updated token in API requests', async () => {
+      api.setToken('new-token-value');
+
+      const mockReq = createMockRequest();
+      const mockRes = createMockResponse(200, { items: [] });
+      mockHttpsRequest.mockImplementation((options, callback) => {
+        callback(mockRes);
+        return mockReq;
+      });
+
+      await api.listScopes('global');
+
+      const callOptions = mockHttpsRequest.mock.calls[0][0];
+      expect(callOptions.headers.Authorization).toBe('Bearer new-token-value');
+    });
   });
 
   describe('listScopes', () => {
@@ -284,6 +300,40 @@ describe('BoundaryAPI', () => {
       expect(authMethods[0].type).toBe('oidc');
       expect(authMethods[0].isPrimary).toBe(true);
     });
+
+    it('should work without a token (for login flow)', async () => {
+      // Clear the token to simulate login flow
+      api.setToken(undefined);
+
+      const mockReq = createMockRequest();
+      const mockRes = createMockResponse(200, {
+        items: [
+          {
+            id: 'amoidc_123',
+            scope_id: 'global',
+            name: 'OIDC Auth',
+            type: 'oidc',
+            is_primary: true,
+          },
+        ],
+      });
+
+      mockHttpsRequest.mockImplementation((options, callback) => {
+        callback(mockRes);
+        return mockReq;
+      });
+
+      // Should NOT throw auth error - listAuthMethods allows unauthenticated
+      const authMethods = await api.listAuthMethods('global');
+
+      expect(mockHttpsRequest).toHaveBeenCalled();
+      const callOptions = mockHttpsRequest.mock.calls[0][0];
+      // Should NOT have Authorization header when no token
+      expect(callOptions.headers.Authorization).toBeUndefined();
+
+      expect(authMethods).toHaveLength(1);
+      expect(authMethods[0].id).toBe('amoidc_123');
+    });
   });
 
   describe('authorizeSession', () => {
@@ -387,6 +437,100 @@ describe('BoundaryAPI', () => {
       expect(session.credentials).toBeDefined();
       expect(session.credentials![0].credential.username).toBe('node');
       expect(session.credentials![0].credential.certificate).toContain('ssh-ed25519-cert');
+    });
+
+    it('should throw error when authorize-session response is missing session_id', async () => {
+      const mockReq = createMockRequest();
+      const mockRes = createMockResponse(200, {
+        // Missing session_id
+        authorization_token: 'auth-token-xyz',
+        endpoint: '10.0.0.1',
+      });
+
+      mockHttpsRequest.mockImplementation((options, callback) => {
+        callback(mockRes);
+        return mockReq;
+      });
+
+      await expect(api.authorizeSession('ttcp_456')).rejects.toMatchObject({
+        code: BoundaryErrorCode.CLI_EXECUTION_FAILED,
+        message: expect.stringContaining('missing session_id'),
+      });
+    });
+
+    it('should default endpoint_port to 0 when not provided', async () => {
+      const mockReq = createMockRequest();
+      const mockRes = createMockResponse(200, {
+        session_id: 's_123',
+        authorization_token: 'auth-token-xyz',
+        endpoint: '10.0.0.1',
+        // endpoint_port intentionally omitted
+      });
+
+      mockHttpsRequest.mockImplementation((options, callback) => {
+        callback(mockRes);
+        return mockReq;
+      });
+
+      const session = await api.authorizeSession('ttcp_456');
+      expect(session.endpointPort).toBe(0);
+    });
+
+    it('should parse expiration date correctly', async () => {
+      const mockReq = createMockRequest();
+      const mockRes = createMockResponse(200, {
+        session_id: 's_123',
+        authorization_token: 'auth-token-xyz',
+        endpoint: '10.0.0.1',
+        expiration: '2025-12-16T12:30:00Z',
+      });
+
+      mockHttpsRequest.mockImplementation((options, callback) => {
+        callback(mockRes);
+        return mockReq;
+      });
+
+      const session = await api.authorizeSession('ttcp_456');
+      expect(session.expiration).toBeInstanceOf(Date);
+      expect(session.expiration.toISOString()).toBe('2025-12-16T12:30:00.000Z');
+    });
+
+    it('should default to current date when expiration is missing', async () => {
+      const beforeTest = new Date();
+      const mockReq = createMockRequest();
+      const mockRes = createMockResponse(200, {
+        session_id: 's_123',
+        authorization_token: 'auth-token-xyz',
+        endpoint: '10.0.0.1',
+        // expiration omitted
+      });
+
+      mockHttpsRequest.mockImplementation((options, callback) => {
+        callback(mockRes);
+        return mockReq;
+      });
+
+      const session = await api.authorizeSession('ttcp_456');
+      expect(session.expiration).toBeInstanceOf(Date);
+      expect(session.expiration.getTime()).toBeGreaterThanOrEqual(beforeTest.getTime());
+    });
+
+    it('should handle empty credentials array', async () => {
+      const mockReq = createMockRequest();
+      const mockRes = createMockResponse(200, {
+        session_id: 's_123',
+        authorization_token: 'auth-token-xyz',
+        endpoint: '10.0.0.1',
+        credentials: [], // Empty array
+      });
+
+      mockHttpsRequest.mockImplementation((options, callback) => {
+        callback(mockRes);
+        return mockReq;
+      });
+
+      const session = await api.authorizeSession('ttcp_456');
+      expect(session.credentials).toBeUndefined();
     });
   });
 
