@@ -4,8 +4,7 @@
  */
 
 import * as vscode from 'vscode';
-import { Session } from '../types';
-import { getConnectionManager } from '../connection/connectionManager';
+import { IConnectionManager, Session } from '../types';
 import { logger } from '../utils/logger';
 
 interface WebviewMessage {
@@ -19,7 +18,10 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _disposables: vscode.Disposable[] = [];
 
-  constructor(private readonly _extensionUri: vscode.Uri) {}
+  constructor(
+    private readonly _extensionUri: vscode.Uri,
+    private readonly _connectionManager: IConnectionManager
+  ) {}
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -36,9 +38,8 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
     this._updateView();
 
     // Listen for session changes
-    const connectionManager = getConnectionManager();
     this._disposables.push(
-      connectionManager.onSessionsChanged(() => this._updateView())
+      this._connectionManager.onSessionsChanged(() => this._updateView())
     );
 
     // Handle messages from webview
@@ -50,7 +51,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             if (message.sessionId) {
               logger.info(`Disconnecting session: ${message.sessionId}`);
               try {
-                await connectionManager.disconnect(message.sessionId);
+                await this._connectionManager.disconnect(message.sessionId);
                 logger.info(`Session ${message.sessionId} disconnected successfully`);
               } catch (err) {
                 logger.error(`Failed to disconnect session ${message.sessionId}:`, err);
@@ -61,7 +62,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
             break;
           case 'disconnectAll':
             logger.info('Disconnecting all sessions');
-            await connectionManager.disconnectAll();
+            await this._connectionManager.disconnectAll();
             break;
           case 'copyPort':
             if (message.port) {
@@ -81,7 +82,7 @@ export class SessionsPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const sessions = getConnectionManager().getActiveSessions();
+    const sessions = this._connectionManager.getActiveSessions();
     this._view.webview.html = this._getHtmlContent(sessions);
   }
 
@@ -600,9 +601,12 @@ function getNonce(): string {
 // Singleton
 let panelProvider: SessionsPanelProvider | undefined;
 
-export function createSessionsPanelProvider(extensionUri: vscode.Uri): SessionsPanelProvider {
+export function createSessionsPanelProvider(
+  extensionUri: vscode.Uri,
+  connectionManager: IConnectionManager
+): SessionsPanelProvider {
   if (!panelProvider) {
-    panelProvider = new SessionsPanelProvider(extensionUri);
+    panelProvider = new SessionsPanelProvider(extensionUri, connectionManager);
   }
   return panelProvider;
 }

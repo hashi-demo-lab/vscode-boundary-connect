@@ -157,8 +157,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   context.subscriptions.push(treeView);
 
+  // Get connection manager from container (used by multiple components)
+  const connectionManager = serviceContainer.connections;
+  const statusBar = serviceContainer.statusBar;
+
   // Register Sessions Panel (Webview)
-  const sessionsPanelProvider = createSessionsPanelProvider(context.extensionUri);
+  const sessionsPanelProvider = createSessionsPanelProvider(
+    context.extensionUri,
+    connectionManager
+  );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       'boundary.sessionsPanel',
@@ -171,10 +178,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.window.registerFileDecorationProvider(decorationProvider)
   );
-
-  // Wire up connection manager (from container) to status bar
-  const connectionManager = serviceContainer.connections;
-  const statusBar = serviceContainer.statusBar;
 
   context.subscriptions.push(
     connectionManager.onSessionsChanged(sessions => {
