@@ -358,10 +358,14 @@ export async function triggerRemoteSSH(options: RemoteSSHConnectionOptions & { t
   // The vscode-remote URI scheme with just the alias (no user@) works with SSH config
   logger.info(`Opening Remote SSH with alias: ${hostAlias}`);
 
+  // Get configured default remote path
+  const config = vscode.workspace.getConfiguration('boundary');
+  const defaultRemotePath = config.get<string>('defaultRemotePath') || '/workspace';
+
   // Use URI scheme - this is the most reliable method
   // The alias in SSH config contains all connection details (host, port, user)
   try {
-    const uri = vscode.Uri.parse(`vscode-remote://ssh-remote+${hostAlias}/`);
+    const uri = vscode.Uri.parse(`vscode-remote://ssh-remote+${hostAlias}${defaultRemotePath}`);
     logger.info(`Remote SSH URI: ${uri.toString()}`);
 
     await vscode.commands.executeCommand('vscode.openFolder', uri, {

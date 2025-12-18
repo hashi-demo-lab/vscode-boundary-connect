@@ -104,12 +104,27 @@ export class ConnectionManager implements IConnectionManager {
       // Continue without brokered credentials - user will be prompted for username
     }
 
-    // For SSH/TCP targets without brokered credentials, prompt for username
+    // For SSH/TCP targets without brokered credentials, determine username
     if (!userName && (target.type === 'ssh' || target.type === 'tcp')) {
-      userName = await this.promptForUsername(target);
-      if (userName === undefined) {
-        // User cancelled
-        throw new Error('Connection cancelled');
+      // Check for configured default first (skip prompt if set)
+      const config = vscode.workspace.getConfiguration('boundary');
+      const defaultSshUser = config.get<string>('defaultSshUser');
+      if (defaultSshUser) {
+        userName = defaultSshUser;
+        logger.info(`Using configured default username: ${defaultSshUser}`);
+      }
+
+      // Only prompt if no username yet
+      if (!userName) {
+        userName = await this.promptForUsername(target, target.type === 'ssh');
+        if (userName === undefined && target.type !== 'ssh') {
+          // User cancelled on TCP target (username required)
+          throw new Error('Connection cancelled');
+        }
+        // For SSH with no input, rely on credential injection
+        if (!userName && target.type === 'ssh') {
+          logger.info('No username provided - relying on SSH credential injection');
+        }
       }
     }
 
@@ -179,21 +194,23 @@ export class ConnectionManager implements IConnectionManager {
 
   /**
    * Prompt user for SSH username
+   * @param target - Target to connect to
+   * @param allowEmpty - Allow empty username (for SSH credential injection)
    */
-  private async promptForUsername(target: BoundaryTarget): Promise<string | undefined> {
+  private async promptForUsername(target: BoundaryTarget, allowEmpty: boolean = false): Promise<string | undefined> {
     // Check if we have a saved username for this target
     const savedUserName = this.getSavedUsername(target.id);
 
     const userName = await vscode.window.showInputBox({
-      prompt: `Enter SSH username for ${target.name}`,
-      placeHolder: 'e.g., ubuntu, ec2-user, admin',
+      prompt: `Enter SSH username for ${target.name}${allowEmpty ? ' (optional for credential injection)' : ''}`,
+      placeHolder: allowEmpty ? 'Leave empty for injected credentials (or set boundary.defaultSshUser)' : 'e.g., ubuntu, ec2-user, admin',
       value: savedUserName,
       ignoreFocusOut: true,
       validateInput: (value) => {
-        if (!value || value.trim().length === 0) {
+        if (!allowEmpty && (!value || value.trim().length === 0)) {
           return 'Username is required for SSH connection';
         }
-        if (value.includes(' ')) {
+        if (value && value.includes(' ')) {
           return 'Username cannot contain spaces';
         }
         return undefined;

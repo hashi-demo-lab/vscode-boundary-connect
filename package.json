@@ -184,6 +184,16 @@
           "default": false,
           "description": "Automatically connect to last used target on startup"
         },
+        "boundary.defaultSshUser": {
+          "type": "string",
+          "default": "",
+          "description": "Default SSH username for targets with credential injection (leave empty to prompt)"
+        },
+        "boundary.defaultRemotePath": {
+          "type": "string",
+          "default": "/workspace",
+          "description": "Default folder path to open on remote SSH connections"
+        },
         "boundary.logLevel": {
           "type": "string",
           "enum": [
@@ -237,13 +247,13 @@
     "@typescript-eslint/parser": "^8.50.0",
     "@vscode/test-electron": "^2.3.8",
     "@vscode/vsce": "^3.7.1",
-    "esbuild": "^0.27.1",
-    "eslint": "^9.39.2",
-    "jest": "^30.2.0",
+    "esbuild": "^0.27.2",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
     "ts-jest": "^29.1.2",
     "typescript": "^5.3.3"
   },
   "dependencies": {
-    "zod": "^4.1.13"
+    "zod": "^4.2.1"
   }
 }
