@@ -3,5 +3,7 @@
   "boundary.tlsInsecure": true,
   "boundary.defaultAuthMethod": "oidc",
   "boundary.logLevel": "debug",
-  "boundary.autoConnect": true
+  "boundary.autoConnect": true,
+  "boundary.defaultSshUser": "node",
+  "boundary.defaultRemotePath": "/workspace"
 }
