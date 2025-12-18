@@ -184,6 +184,11 @@
           "default": false,
           "description": "Automatically connect to last used target on startup"
         },
+        "boundary.defaultSshUser": {
+          "type": "string",
+          "default": "",
+          "description": "Default SSH username for targets with credential injection (leave empty to prompt)"
+        },
         "boundary.logLevel": {
           "type": "string",
           "enum": [
