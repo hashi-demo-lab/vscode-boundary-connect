@@ -189,6 +189,11 @@
           "default": "",
           "description": "Default SSH username for targets with credential injection (leave empty to prompt)"
         },
+        "boundary.defaultRemotePath": {
+          "type": "string",
+          "default": "/workspace",
+          "description": "Default folder path to open on remote SSH connections"
+        },
         "boundary.logLevel": {
           "type": "string",
           "enum": [
