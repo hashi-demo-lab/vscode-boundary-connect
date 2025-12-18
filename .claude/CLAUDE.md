@@ -2,32 +2,78 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Note**: This project uses AGENTS.md files for detailed guidance. 
+## Build & Development Commands
 
-## Primary Reference
+```bash
+npm install          # Install dependencies
+npm run compile      # Build extension (esbuild)
+npm run watch        # Build with file watching
+npm run lint         # Run ESLint
+npm test             # Run all tests (Jest)
+npm run test:unit    # Run unit tests only
+npm run package      # Package as .vsix
+```
 
-Please see the root `./AGENTS.md` in this same directory for the main project documentation and guidance. 
+Run a single test file:
+```bash
+npx jest tests/unit/auth/authManager.test.ts
+```
 
-@/workspace/AGENTS.md
+Run tests matching a pattern:
+```bash
+npx jest --testNamePattern="should authenticate"
+```
 
+## Architecture Overview
 
-## Additional Component-Specific Guidance
+This is a VS Code extension that integrates HashiCorp Boundary with VS Code Remote SSH. The extension follows a dependency injection pattern with a service container.
 
-For detailed module-specific implementation guides, also check for AGENTS.md files in subdirectories throughout the project
+### Service Container (`src/services/container.ts`)
 
-These component-specific AGENTS.md files contain targeted guidance for working with those particular areas of the codebase.
+Central DI container with lazy initialization. All services accessed via `IServiceContainer`:
+- `config` - Configuration from VS Code settings
+- `cli` - Boundary CLI wrapper (source of truth for tokens via keyring)
+- `authState` - State machine for authentication state
+- `auth` - Authentication orchestration
+- `targets` - Target discovery and caching
+- `connections` - Session/connection lifecycle
+- `statusBar` - UI status indicators
 
-If you need to ask the user a question use the tool AskUserQuestion this is useful during speckit.clarify
+### Module Structure
 
-## Updating AGENTS.md Files
+```
+src/
+├── auth/           # Authentication (OIDC, password, state machine)
+├── boundary/       # CLI wrapper, API types, JSON parsing
+├── connection/     # Session management, Remote SSH integration
+├── targets/        # Target discovery, tree provider
+├── ui/             # Status bar, notifications, webview panels
+├── utils/          # Config, logger, errors, validation
+├── services/       # DI container
+├── extension.ts    # Entry point, command registration
+└── types.ts        # All TypeScript interfaces
+```
 
-When you discover new information that would be helpful for future development work, please:
+### Key Patterns
 
-- **Update existing AGENTS.md files** when you learn implementation details, debugging insights, or architectural patterns specific to that component
-- **Create new AGENTS.md files** in relevant directories when working with areas that don't yet have documentation
-- **Add valuable insights** such as common pitfalls, debugging techniques, dependency relationships, or implementation patterns
+**Auth State Machine**: `AuthStateManager` handles state transitions (`initializing` → `authenticated` → `expired` etc.). The Boundary CLI keyring is the source of truth for tokens.
 
-## Important use subagents liberally
+**Tree Data Provider**: `TargetProvider` implements `vscode.TreeDataProvider` for the sidebar, subscribes to auth state changes.
 
-When performing any research concurrent subagents can be used for performance and isolation
-use parrallel tool calls and tasks where possible
+**Connection Flow**: `ConnectionManager` → `BoundaryCLI.connect()` → spawns `boundary connect` process → configures SSH config → opens Remote SSH.
+
+### Testing
+
+Tests use Jest with a VS Code mock (`tests/mocks/vscode.ts`). Test files mirror source structure under `tests/unit/`.
+
+## Additional Guidance
+
+See `./AGENTS.md` for TDD practices and core principles.
+
+Check for additional `AGENTS.md` files in subdirectories for component-specific guidance.
+
+## Working with This Codebase
+
+- Use `AskUserQuestion` tool when clarification is needed
+- Use parallel subagents for concurrent research tasks
+- Update AGENTS.md files when discovering new patterns or insights
