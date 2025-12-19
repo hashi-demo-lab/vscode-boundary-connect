@@ -420,8 +420,616 @@ An alternative to the current envbuilder approach is a **generic sandbox with Do
 |---------|----------|------------------|-------|
 | **DinD (privileged)** | Low | Simple | Requires `privileged: true` |
 | **Sysbox** | High | Medium | Rootless nested containers, requires Sysbox on nodes |
-| **Kata Containers** | High | Medium | VM-level isolation, good for untrusted workloads |
+| **Kata Containers** | Very High | Medium | VM-level isolation, recommended for multi-tenant |
 | **gVisor + Docker** | Medium | Medium | User-space kernel, some compatibility issues |
+
+---
+
+## Recommended: Kata Containers for Secure Multi-Tenant Sandboxes
+
+Kata Containers provides **VM-level isolation** for each sandbox, eliminating the need for privileged mode while enabling full Docker-in-Docker functionality.
+
+### Why Kata for This Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│            KATA CONTAINERS: VM-LEVEL ISOLATION                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Without Kata (privileged DinD):          With Kata:                        │
+│  ───────────────────────────────          ──────────────────────            │
+│  Pod needs privileged: true               Pod runs in micro-VM              │
+│  Docker shares host kernel                Docker has isolated kernel        │
+│  Security concern for multi-tenant        Safe for multi-tenant             │
+│                                                                              │
+│  Kubernetes Node                          Kubernetes Node                   │
+│  ┌─────────────────────────┐              ┌─────────────────────────┐       │
+│  │  Shared Kernel          │              │  Host Kernel            │       │
+│  │  ┌───────────────────┐  │              │  ┌───────────────────┐  │       │
+│  │  │ Pod (privileged)  │  │              │  │ Kata VM           │  │       │
+│  │  │ ┌───────────────┐ │  │              │  │ ┌───────────────┐ │  │       │
+│  │  │ │ Docker        │ │  │              │  │ │ Guest Kernel  │ │  │       │
+│  │  │ │ ┌───────────┐ │ │  │              │  │ │ ┌───────────┐ │ │  │       │
+│  │  │ │ │DevContainer│ │ │  │              │  │ │ │ Docker    │ │ │  │       │
+│  │  │ │ └───────────┘ │ │  │              │  │ │ │ ┌───────┐ │ │ │  │       │
+│  │  │ └───────────────┘ │  │              │  │ │ │ │DevCont│ │ │ │  │       │
+│  │  └───────────────────┘  │              │  │ │ └─┴───────┴─┘ │ │  │       │
+│  └─────────────────────────┘              │  │ └───────────────┘ │  │       │
+│                                           │  └───────────────────┘  │       │
+│  Risk: Container escape → host            └─────────────────────────┘       │
+│                                           Safe: Escape only reaches VM      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Kata Benefits
+
+| Benefit | Description |
+|---------|-------------|
+| **No privileged mode** | Docker runs normally inside VM, no security compromise |
+| **Kernel isolation** | Each sandbox has its own kernel, kernel exploits contained |
+| **Resource isolation** | Memory/CPU limits enforced by hypervisor, not just cgroups |
+| **Multi-tenant safe** | Alice's sandbox cannot affect Bob's sandbox |
+| **Nested containers work** | Docker-in-Docker just works with full kernel support |
+
+### Trade-offs
+
+| Aspect | Impact |
+|--------|--------|
+| VM boot overhead | ~1-2 seconds (acceptable for persistent sandboxes) |
+| Memory overhead | ~50-100MB per VM |
+| Node requirement | Kata runtime must be installed on K8s nodes |
+
+---
+
+## Hybrid Architecture: envbuilder + Kata + DevContainers
+
+Combine **envbuilder** (for cached sandbox builds) with **Kata** (for security) and **dynamic devcontainers** (for flexibility).
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HYBRID: ENVBUILDER + KATA + DYNAMIC DEVCONTAINERS                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Pod Startup (envbuilder + Kata)            On Connect (developer)          │
+│  ───────────────────────────────            ──────────────────────          │
+│                                                                              │
+│  ┌─────────────────────────────┐           ┌─────────────────────────────┐  │
+│  │ Kata VM boots (~1-2 sec)    │           │ Developer connects:         │  │
+│  │ envbuilder builds:          │           │                             │  │
+│  │ generic-sandbox             │           │ 1. SSH into sandbox (Kata)  │  │
+│  │ devcontainer.json           │  ───────► │ 2. Clone project repo       │  │
+│  │ ├── SSH Server              │           │ 3. devcontainer up          │  │
+│  │ ├── Docker Engine           │           │ 4. Work in nested           │  │
+│  │ ├── devcontainer CLI        │           │    devcontainer             │  │
+│  │ └── Base tools              │           │                             │  │
+│  └─────────────────────────────┘           └─────────────────────────────┘  │
+│                                                                              │
+│  Benefits:                                                                   │
+│  ✓ envbuilder's layer caching for generic sandbox                           │
+│  ✓ Kata VM isolation (no privileged mode)                                   │
+│  ✓ Kubernetes-native (Sandbox CRD unchanged)                                │
+│  ✓ Dynamic project devcontainers on demand                                  │
+│  ✓ One sandbox → many projects                                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Complete Architecture with Kata
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  COMPLETE: ENVBUILDER + KATA + DEVCONTAINERS + EMBEDDED URI                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Developer                  Boundary              Kubernetes (Kata)         │
+│                                                                              │
+│  ┌─────────────┐           ┌─────────┐           ┌─────────────────────┐   │
+│  │ VS Code     │           │Controller│           │ Kata VM             │   │
+│  │ + Extension │           │+ Workers│           │ (sandbox-alice)     │   │
+│  └──────┬──────┘           └────┬────┘           │ ┌─────────────────┐ │   │
+│         │                       │                 │ │ envbuilder      │ │   │
+│         │ 1. Connect            │                 │ │ generic sandbox │ │   │
+│         ├──────────────────────►│                 │ │ ├── SSH         │ │   │
+│         │                       │                 │ │ ├── Docker      │ │   │
+│         │ 2. SSH cert           │                 │ │ └── devcontainer│ │   │
+│         │◄──────────────────────┤                 │ │      CLI        │ │   │
+│         │                       │                 │ │                 │ │   │
+│         │ 3. SSH tunnel ────────┼────────────────►│ │  ┌───────────┐  │ │   │
+│         │                       │                 │ │  │DevContainer│  │ │   │
+│         │ 4. git clone +        │                 │ │  │(project)  │  │ │   │
+│         │    devcontainer up    │                 │ │  └───────────┘  │ │   │
+│         │    (via SSH)          │                 │ └─────────────────┘ │   │
+│         │                       │                 └─────────────────────┘   │
+│         │ 5. Open URI directly  │                                           │
+│         │    into devcontainer  │                  Isolated by VM kernel    │
+│         │                       │                  No privileged needed     │
+│         ▼                       │                                           │
+│  ┌─────────────┐                │                                           │
+│  │ Working in  │                │                                           │
+│  │ devcontainer│                │                                           │
+│  │ (one click) │                │                                           │
+│  └─────────────┘                │                                           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Generic Sandbox devcontainer.json (for envbuilder with Kata)
+
+```json
+{
+  "name": "Generic Development Sandbox (Kata)",
+  "image": "ubuntu:22.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "dockerDashComposeVersion": "v2"
+    },
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "postCreateCommand": "npm install -g @devcontainers/cli && bash /workspaces/.devcontainer/scripts/setup-ssh-ca.sh",
+  "remoteUser": "vscode",
+  "workspaceFolder": "/workspaces",
+  "containerEnv": {
+    "DOCKER_HOST": "unix:///var/run/docker.sock"
+  },
+  "mounts": [
+    "source=sandbox-docker-cache,target=/var/lib/docker,type=volume"
+  ],
+  "portsAttributes": {
+    "22": { "label": "SSH" },
+    "13337": { "label": "code-server" }
+  }
+}
+```
+
+### Kubernetes Manifest with Kata Runtime
+
+```yaml
+# k8s/generic-sandbox/sandbox-kata.yaml
+apiVersion: agentsandbox.io/v1alpha1
+kind: Sandbox
+metadata:
+  name: sandbox-${DEVELOPER}
+  namespace: dev-sandboxes
+  labels:
+    app: generic-sandbox
+    developer: ${DEVELOPER}
+spec:
+  # Use Kata runtime for VM-level isolation
+  runtimeClassName: kata-qemu  # or kata-clh (Cloud Hypervisor)
+
+  image: ghcr.io/myorg/generic-sandbox:latest
+
+  # NO privileged needed with Kata!
+  # Docker-in-Docker works because Kata provides a real kernel
+  # securityContext:
+  #   privileged: true  # ← NOT REQUIRED
+
+  env:
+    - name: GIT_REPO_URL
+      value: ""
+    - name: GIT_BRANCH
+      value: "main"
+    - name: AUTO_DEVCONTAINER
+      value: "false"
+
+  resources:
+    requests:
+      cpu: "2"
+      memory: "4Gi"
+    limits:
+      cpu: "8"
+      memory: "16Gi"
+      # Note: memory includes both guest OS and containers
+
+  volumes:
+    # Workspace persists repos and working files
+    - name: workspace
+      mountPath: /workspace
+      persistentVolumeClaim:
+        claimName: sandbox-${DEVELOPER}-workspace
+
+    # Docker layer cache (critical for fast devcontainer rebuilds)
+    - name: docker-cache
+      mountPath: /var/lib/docker
+      persistentVolumeClaim:
+        claimName: sandbox-${DEVELOPER}-docker
+
+    # Vault SSH CA
+    - name: vault-ssh-ca
+      mountPath: /vault-ssh-ca
+      secret:
+        secretName: vault-ssh-ca
+
+---
+# PVC for Docker layer cache (enables fast devcontainer rebuilds)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandbox-${DEVELOPER}-docker
+  namespace: dev-sandboxes
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: fast-ssd  # SSD recommended for Docker operations
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-${DEVELOPER}
+  namespace: dev-sandboxes
+spec:
+  type: ClusterIP
+  selector:
+    app: generic-sandbox
+    developer: ${DEVELOPER}
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+```
+
+---
+
+## DevContainer Image Caching Strategies
+
+Fast devcontainer builds are critical for good UX. Multiple caching layers ensure minimal wait times.
+
+### Caching Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  DEVCONTAINER CACHING LAYERS                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  First `devcontainer up`:                 Subsequent `devcontainer up`:     │
+│  ─────────────────────────                ──────────────────────────────    │
+│                                                                              │
+│  Pull base image ─────────► 2-5 min       Using cached image ──► <1 sec    │
+│  Install features ────────► 1-3 min       Using cached layers ──► <1 sec   │
+│  Run postCreateCommand ───► 1-2 min       Skip (already done) ──► 0 sec    │
+│  ─────────────────────────────────        ─────────────────────────────     │
+│  Total: 4-10 min                          Total: <5 seconds                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Cache Locations
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CACHE LOCATIONS IN SANDBOX                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Sandbox Pod (Kata VM)                                                      │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                                                                        │  │
+│  │   /var/lib/docker (PVC: 50Gi)  ← DOCKER LAYER CACHE                   │  │
+│  │   ├── overlay2/                 ← Image layers                        │  │
+│  │   │   ├── abc123.../            ← ubuntu:22.04 base                   │  │
+│  │   │   ├── def456.../            ← node:20 layer                       │  │
+│  │   │   └── ghi789.../            ← devcontainer features               │  │
+│  │   ├── image/                    ← Image metadata                      │  │
+│  │   └── containers/               ← Running container data              │  │
+│  │                                                                        │  │
+│  │   /workspace (PVC: 25Gi)        ← PROJECT FILES                       │  │
+│  │   ├── project-a/                                                      │  │
+│  │   │   ├── .devcontainer/                                              │  │
+│  │   │   └── src/                                                        │  │
+│  │   └── project-b/                                                      │  │
+│  │       ├── .devcontainer/                                              │  │
+│  │       └── src/                                                        │  │
+│  │                                                                        │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  Cache persists across:                                                      │
+│  ✓ Pod restarts                                                             │
+│  ✓ devcontainer rebuilds                                                    │
+│  ✓ Different projects (shared base images)                                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Caching Strategy Options
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CACHING OPTIONS (Combine for Best Results)                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Layer 1: LOCAL PVC (Default)                                               │
+│  ─────────────────────────────────────                                      │
+│  • Docker layers stored in /var/lib/docker PVC                              │
+│  • Per-developer cache (not shared across developers)                       │
+│  • Fast rebuilds after first build                                          │
+│                                                                              │
+│  Layer 2: PRE-PULLED BASE IMAGES (DaemonSet)                                │
+│  ─────────────────────────────────────                                      │
+│  • DaemonSet pre-pulls popular base images to nodes                         │
+│  • Images: node:20, python:3.11, mcr.microsoft.com/devcontainers/*         │
+│  • Reduces first devcontainer build time                                    │
+│                                                                              │
+│  Layer 3: PRE-BUILT DEVCONTAINER IMAGES (CI/CD) - Recommended               │
+│  ─────────────────────────────────────                                      │
+│  • CI builds and pushes devcontainer images nightly                         │
+│  • Projects reference pre-built image in devcontainer.json                  │
+│  • First connect: pull only (~30 sec instead of 5-10 min)                   │
+│                                                                              │
+│  Layer 4: REGISTRY CACHE (BuildKit)                                         │
+│  ─────────────────────────────────────                                      │
+│  • Push built layers to registry cache                                      │
+│  • Shared across all developers                                             │
+│  • Useful for large teams                                                   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pre-Built DevContainer Images (Fastest UX)
+
+```json
+// .devcontainer/devcontainer.json (in project repo)
+{
+  // Use pre-built image instead of building from features:
+  "image": "ghcr.io/myorg/devcontainer-myproject:latest",
+
+  "workspaceFolder": "/workspaces/myproject",
+  "remoteUser": "vscode"
+
+  // postCreateCommand still runs (but fast since deps installed in image)
+}
+```
+
+```yaml
+# .github/workflows/devcontainer-build.yml
+name: Build DevContainer Image
+on:
+  push:
+    paths: ['.devcontainer/**']
+  schedule:
+    - cron: '0 0 * * *'  # Nightly rebuild
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build devcontainer image
+        uses: devcontainers/ci@v0.3
+        with:
+          imageName: ghcr.io/${{ github.repository }}/devcontainer
+          cacheFrom: ghcr.io/${{ github.repository }}/devcontainer
+          push: always
+```
+
+### Time Comparison
+
+| Scenario | First Build | Subsequent |
+|----------|-------------|------------|
+| **No caching** | 5-10 min | 5-10 min |
+| **Local PVC cache only** | 5-10 min | <10 sec |
+| **Pre-pulled base images** | 2-5 min | <10 sec |
+| **Pre-built devcontainer image** | <30 sec (pull) | <10 sec |
+| **Pre-built + local cache** | <30 sec | <5 sec |
+
+---
+
+## Seamless UX: Embedded DevContainer URI
+
+Skip the "Reopen in Container" prompt by having the extension orchestrate devcontainer launch and open VS Code directly into the container.
+
+### URI-Based Connection Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│            SEAMLESS FLOW: EMBEDDED DEVCONTAINER URI                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Standard flow (2 steps):                 With URI (1 step):                │
+│  ─────────────────────────                ─────────────────────             │
+│                                                                              │
+│  1. Connect to sandbox SSH                1. Connect directly to devcontainer│
+│  2. "Reopen in Container" prompt             inside sandbox                  │
+│                                                                              │
+│  Click ──► SSH ──► Prompt ──► DC          Click ──► DC (via SSH tunnel)    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Extension-Orchestrated Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  EXTENSION ORCHESTRATES DEVCONTAINER LAUNCH                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Target Config (VS Code settings or Boundary metadata):                      │
+│  {                                                                           │
+│    "targetId": "tssh_xxx",                                                  │
+│    "devcontainer": {                                                        │
+│      "repo": "https://github.com/org/my-project",                          │
+│      "workspaceFolder": "/workspaces/my-project",                          │
+│      "autoLaunch": true                                                     │
+│    }                                                                        │
+│  }                                                                          │
+│                                                                              │
+│  ┌─────────────┐                                                            │
+│  │   VS Code   │                                                            │
+│  │  Extension  │                                                            │
+│  └──────┬──────┘                                                            │
+│         │                                                                    │
+│         │ 1. boundary connect (SSH tunnel to sandbox)                       │
+│         ▼                                                                    │
+│  ┌─────────────────────────────────────────────────────────┐                │
+│  │  Sandbox Pod (Kata VM, via SSH)                         │                │
+│  │                                                         │                │
+│  │  2. Extension runs via SSH:                             │                │
+│  │     git clone <repo> /workspaces/<project>              │                │
+│  │     devcontainer up --workspace-folder /workspaces/...  │                │
+│  │                                                         │                │
+│  │  3. Returns container ID                                │                │
+│  │     └─► container_abc123                                │                │
+│  └─────────────────────────────────────────────────────────┘                │
+│         │                                                                    │
+│         │ 4. Extension configures SSH with RemoteCommand:                   │
+│         │    docker exec -it <container_id> /bin/bash                       │
+│         │                                                                    │
+│         │ 5. Extension opens URI:                                           │
+│         │    vscode://vscode-remote/ssh-remote+boundary-dc/workspaces/...   │
+│         ▼                                                                    │
+│  ┌─────────────────────────────────────────────────────────┐                │
+│  │  VS Code opens directly in devcontainer                 │                │
+│  │  No prompts - seamless one-click experience             │                │
+│  └─────────────────────────────────────────────────────────┘                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Extension Implementation
+
+```typescript
+// src/connection/devcontainerLauncher.ts
+
+interface DevContainerConfig {
+  repo?: string;           // Git repo to clone
+  branch?: string;         // Branch to checkout
+  workspaceFolder: string; // Path inside sandbox
+  autoLaunch: boolean;     // Launch devcontainer automatically
+}
+
+export class DevContainerLauncher {
+
+  async launchAndConnect(
+    session: BoundarySession,
+    config: DevContainerConfig
+  ): Promise<void> {
+
+    // 1. Clone repo if needed (via SSH to sandbox)
+    if (config.repo) {
+      await this.sshExec(session, `
+        if [ ! -d "${config.workspaceFolder}/.git" ]; then
+          git clone ${config.branch ? `-b ${config.branch}` : ''} \
+            "${config.repo}" "${config.workspaceFolder}"
+        fi
+      `);
+    }
+
+    // 2. Launch devcontainer (via SSH to sandbox)
+    await this.sshExec(session, `
+      cd "${config.workspaceFolder}" && \
+      devcontainer up --workspace-folder . 2>&1
+    `);
+
+    // 3. Get container ID
+    const containerId = await this.sshExec(session, `
+      docker ps -q --filter "label=devcontainer.local_folder=${config.workspaceFolder}"
+    `);
+
+    // 4. Configure SSH to exec into devcontainer
+    await this.configureShellRedirect(session, containerId.trim(), config.workspaceFolder);
+  }
+
+  private async configureShellRedirect(
+    session: BoundarySession,
+    containerId: string,
+    workspaceFolder: string
+  ): Promise<void> {
+    // SSH config that execs into the devcontainer
+    const hostAlias = `boundary-${session.targetName}-dc`;
+    const sshConfig = `
+Host ${hostAlias}
+    HostName ${session.localHost}
+    Port ${session.localPort}
+    User developer
+    IdentityFile ${session.identityFile}
+    RequestTTY yes
+    RemoteCommand docker exec -it ${containerId} /bin/bash -l
+`;
+
+    await this.appendToSSHConfig(sshConfig);
+
+    // Open VS Code directly to devcontainer
+    const uri = vscode.Uri.parse(
+      `vscode://vscode-remote/ssh-remote+${hostAlias}${workspaceFolder}`
+    );
+    await vscode.env.openExternal(uri);
+  }
+}
+```
+
+### Target Configuration Options
+
+```json
+// VS Code settings.json
+{
+  "boundary.targets": {
+    "tssh_sandbox_pool": {
+      "type": "devcontainer-sandbox",
+      "devcontainer": {
+        "repo": "https://github.com/myorg/myapp",
+        "workspaceFolder": "/workspaces/myapp",
+        "autoLaunch": true
+      }
+    }
+  }
+}
+```
+
+### Final UX Flow
+
+```
+Developer clicks "Connect to sandbox" (with devcontainer config)
+    │
+    ▼
+Extension: boundary connect → SSH tunnel established
+    │
+    ▼
+Extension (via SSH): git clone + devcontainer up (cached = fast)
+    │
+    ▼
+Extension: Configure SSH with RemoteCommand → docker exec
+    │
+    ▼
+Extension: Open vscode://vscode-remote/ssh-remote+boundary-dc/workspace
+    │
+    ▼
+VS Code opens directly inside devcontainer
+
+Total: ONE CLICK → Working in project devcontainer
+```
+
+---
+
+## Summary: Recommended Architecture
+
+| Component | Choice | Rationale |
+|-----------|--------|-----------|
+| **Pod Runtime** | Kata Containers | VM isolation, no privileged mode needed |
+| **Sandbox Build** | envbuilder | Layer caching, Sandbox CRD native |
+| **Inner Containers** | Docker-in-Docker | Standard devcontainer workflow |
+| **Connection** | Boundary SSH | Zero-trust access with Vault SSH CA |
+| **Caching** | PVC + Pre-built images | Sub-30-second first connect |
+| **UX** | Embedded URI | One-click to devcontainer |
+
+This architecture provides:
+- ✅ **Maximum security** (Kata VM isolation)
+- ✅ **Fast startup** (envbuilder + image caching)
+- ✅ **Flexibility** (any project devcontainer)
+- ✅ **Seamless UX** (one-click connection)
+- ✅ **Multi-tenant safe** (complete isolation between developers)
+
+---
 
 ### Generic Sandbox Dockerfile
 
