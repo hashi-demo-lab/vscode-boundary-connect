@@ -12,7 +12,7 @@
  */
 
 import * as vscode from 'vscode';
-import { BoundaryTarget, IAuthManager, ITargetProvider } from './types';
+import { BoundaryTarget, SessionRecording, IAuthManager, ITargetProvider, IRecordingProvider } from './types';
 import { AuthManager, createAuthManager } from './auth/authManager';
 import { createAuthStateManager, disposeAuthStateManager } from './auth/authState';
 import { executePasswordAuth } from './auth/passwordAuth';
@@ -20,6 +20,8 @@ import { executeOidcAuth } from './auth/oidcAuth';
 import { BoundaryCLI, disposeBoundaryCLI } from './boundary/cli';
 import { TargetProvider } from './targets/targetProvider';
 import { TargetService, disposeTargetService } from './targets/targetService';
+import { RecordingProvider } from './recordings/recordingProvider';
+import { RecordingService, disposeRecordingService } from './recordings/recordingService';
 import { ConnectionManager, disposeConnectionManager } from './connection/connectionManager';
 import { cleanupBoundarySSHConfigEntries } from './connection/remoteSSH';
 import { StatusBarManager, disposeStatusBarManager } from './ui/statusBar';
@@ -39,6 +41,7 @@ import {
 
 let authManager: IAuthManager;
 let targetProvider: ITargetProvider;
+let recordingProvider: IRecordingProvider;
 let serviceContainer: IServiceContainer;
 
 /**
@@ -51,6 +54,7 @@ function createServiceFactories(): ServiceFactories {
     authState: () => createAuthStateManager(),
     auth: (context, cli, authState) => createAuthManager(context, cli, authState),
     targets: (cli) => new TargetService(cli),
+    recordings: (cli) => new RecordingService(cli),
     connections: (cli, context) => {
       const manager = new ConnectionManager(cli, context.globalState);
       return manager;
@@ -157,6 +161,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   context.subscriptions.push(treeView);
 
+  // Initialize recording provider with injected dependencies
+  try {
+    logger.info('Extension: Creating RecordingProvider...');
+    recordingProvider = new RecordingProvider(serviceContainer.recordings, serviceContainer.authState, serviceContainer.cli);
+    logger.info('Extension: RecordingProvider created successfully');
+
+    recordingProvider.setAuthManager(authManager); // Wire up for token expiration handling
+    recordingProvider.initialize(); // Set up event subscriptions
+    context.subscriptions.push(recordingProvider);
+    logger.info('Extension: RecordingProvider initialized');
+
+    // Auto-fetch recordings if already authenticated AND address is configured
+    logger.info(`Extension: Auth state=${(authManager as AuthManager).state}, addrConfigured=${welcomeContext.addrConfigured}`);
+    if ((authManager as AuthManager).state === 'authenticated' && welcomeContext.addrConfigured) {
+      logger.info('Extension: Auto-fetching recordings on startup');
+      recordingProvider.refresh();
+    } else {
+      logger.info('Extension: Skipping auto-fetch recordings');
+    }
+
+    // Register Recordings TreeView
+    logger.info('Extension: Registering recordings tree view...');
+    const recordingsTreeView = vscode.window.createTreeView('boundary.recordings', {
+      treeDataProvider: recordingProvider,
+      showCollapseAll: true,
+    });
+    context.subscriptions.push(recordingsTreeView);
+    logger.info('Extension: Recordings tree view registered');
+  } catch (error) {
+    logger.error('Extension: Failed to initialize RecordingProvider:', error);
+  }
+
   // Get connection manager from container (used by multiple components)
   const connectionManager = serviceContainer.connections;
   const statusBar = serviceContainer.statusBar;
@@ -262,6 +298,33 @@ function registerCommands(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('boundary.refresh', () => {
       targetProvider.refresh();
+    })
+  );
+
+  // Refresh recordings command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('boundary.refreshRecordings', () => {
+      recordingProvider.refresh();
+    })
+  );
+
+  // Play recording command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('boundary.playRecording', async (item: unknown) => {
+      if (!item) {
+        return;
+      }
+      // Context menu passes RecordingTreeItemData, extract the recording
+      const treeItemData = item as { recording?: SessionRecording };
+      const recording = treeItemData.recording;
+      if (!recording) {
+        logger.warn('playRecording called without valid recording data');
+        return;
+      }
+
+      // Import PlaybackPanel dynamically to avoid circular deps
+      const { PlaybackPanel } = await import('./recordings/playbackPanel');
+      await PlaybackPanel.createOrShow(context.extensionUri, serviceContainer.cli, recording);
     })
   );
 

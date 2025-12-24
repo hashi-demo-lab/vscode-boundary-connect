@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
-import { AuthResult, BoundaryAuthMethod, BoundaryScope, BoundaryTarget, SessionAuthorization } from '../types';
+import { AuthResult, BoundaryAuthMethod, BoundaryScope, BoundaryTarget, SessionAuthorization, SessionRecording } from '../types';
 import { logger } from '../utils/logger';
 
 // ============================================================================
@@ -155,6 +155,29 @@ const SessionAuthItemSchema = z.object({
 
 const SessionAuthResponseSchema = BaseApiResponseSchema.extend({
   item: SessionAuthItemSchema.optional(),
+});
+
+/**
+ * Session recording response schema
+ */
+const SessionRecordingItemSchema = z.object({
+  id: z.string(),
+  scope_id: z.string(),
+  storage_bucket_id: z.string().optional(),
+  target_id: z.string().optional(),
+  user_id: z.string().optional(),
+  session_id: z.string().optional(),
+  created_time: z.string(),
+  updated_time: z.string().optional(),
+  duration: z.string().optional(),
+  state: z.string().optional(),
+  byte_count: z.number().optional(),
+  mime_type: z.string().optional(),
+  authorized_actions: z.array(z.string()).optional().default([]),
+});
+
+const SessionRecordingsResponseSchema = BaseApiResponseSchema.extend({
+  items: z.array(SessionRecordingItemSchema).optional().default([]),
 });
 
 /**
@@ -702,4 +725,51 @@ export function createErrorFromResponse(response: BoundaryApiResponse): Boundary
   const message = getErrorMessage(response);
 
   return new BoundaryError(message, errorCode, response);
+}
+
+/**
+ * Parse session recordings list response
+ *
+ * Note: Legacy interface kept for documentation. CLI responses are now validated by Zod schemas.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _SessionRecordingResponseItem {
+  id: string;
+  scope_id: string;
+  storage_bucket_id?: string;
+  target_id?: string;
+  user_id?: string;
+  session_id?: string;
+  created_time: string;
+  updated_time?: string;
+  duration?: string;
+  state?: string;
+  byte_count?: number;
+  mime_type?: string;
+  authorized_actions?: string[];
+}
+
+export function parseSessionRecordingsResponse(output: string): SessionRecording[] {
+  const response = safeParseJson(output, SessionRecordingsResponseSchema, 'sessionRecordings');
+
+  if (isErrorResponse(response)) {
+    throw createErrorFromResponse(response);
+  }
+
+  const items = response.items || [];
+  return items.map(item => ({
+    id: item.id,
+    scopeId: item.scope_id,
+    storageBucketId: item.storage_bucket_id,
+    targetId: item.target_id,
+    userId: item.user_id,
+    sessionId: item.session_id,
+    createdTime: item.created_time,
+    updatedTime: item.updated_time,
+    duration: item.duration,
+    state: item.state,
+    byteCount: item.byte_count,
+    mimeType: item.mime_type,
+    authorizedActions: item.authorized_actions || [],
+  }));
 }

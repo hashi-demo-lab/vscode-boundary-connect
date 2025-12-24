@@ -68,6 +68,16 @@
         "command": "boundary.showSessions",
         "title": "Boundary: Show Sessions",
         "icon": "$(list-unordered)"
+      },
+      {
+        "command": "boundary.refreshRecordings",
+        "title": "Boundary: Refresh Recordings",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "boundary.playRecording",
+        "title": "Play Recording",
+        "icon": "$(play)"
       }
     ],
     "viewsContainers": {
@@ -91,6 +101,12 @@
           "type": "webview",
           "name": "Sessions",
           "contextualTitle": "Active Sessions",
+          "when": "boundary.authenticated"
+        },
+        {
+          "id": "boundary.recordings",
+          "name": "Recordings",
+          "contextualTitle": "Session Recordings",
           "when": "boundary.authenticated"
         }
       ]
@@ -128,6 +144,11 @@
           "command": "boundary.logout",
           "when": "view == boundary.targets && boundary.authenticated",
           "group": "navigation"
+        },
+        {
+          "command": "boundary.refreshRecordings",
+          "when": "view == boundary.recordings",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -139,6 +160,16 @@
         {
           "command": "boundary.connectTarget",
           "when": "view == boundary.targets && viewItem == target",
+          "group": "navigation"
+        },
+        {
+          "command": "boundary.playRecording",
+          "when": "view == boundary.recordings && viewItem == recording",
+          "group": "inline"
+        },
+        {
+          "command": "boundary.playRecording",
+          "when": "view == boundary.recordings && viewItem == recording",
           "group": "navigation"
         }
       ]
@@ -254,6 +285,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "asciinema-player": "^3.13.5",
     "zod": "^4.2.1"
   }
 }

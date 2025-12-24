@@ -130,6 +130,38 @@ export interface BoundaryTarget {
   updatedTime?: Date;
 }
 
+export interface SessionRecording {
+  id: string;
+  scopeId: string;
+  scope?: BoundaryScope;
+  /** ID of the storage bucket containing this recording */
+  storageBucketId?: string;
+  /** Target ID this recording is associated with */
+  targetId?: string;
+  /** Target name (resolved from target ID) */
+  targetName?: string;
+  /** User ID who created this session */
+  userId?: string;
+  /** Username (resolved from user ID) */
+  userName?: string;
+  /** Session ID this recording is associated with */
+  sessionId?: string;
+  /** ISO 8601 timestamp when recording was created */
+  createdTime: string;
+  /** ISO 8601 timestamp when recording was last updated */
+  updatedTime?: string;
+  /** Duration of the recording (e.g., "2m45s") */
+  duration?: string;
+  /** State of the recording (available, unknown, etc.) */
+  state?: string;
+  /** Size in bytes */
+  byteCount?: number;
+  /** MIME type (e.g., "application/x-asciicast") */
+  mimeType?: string;
+  /** Authorized actions user can perform on this recording */
+  authorizedActions?: string[];
+}
+
 // ============================================================================
 // CLI Types
 // ============================================================================
@@ -177,6 +209,8 @@ export interface IBoundaryCLI extends vscode.Disposable {
   listAuthMethods(scopeId?: string): Promise<BoundaryAuthMethod[]>;
   listTargets(scopeId?: string, recursive?: boolean): Promise<BoundaryTarget[]>;
   listScopes(parentScopeId?: string): Promise<BoundaryScope[]>;
+  listSessionRecordings(scopeId: string): Promise<SessionRecording[]>;
+  downloadRecording(recordingId: string): Promise<string>;
   authorizeSession(targetId: string): Promise<SessionAuthorization>;
   connect(targetId: string, options?: ConnectOptions): Promise<Connection>;
 }
@@ -279,6 +313,44 @@ export interface ITargetService extends vscode.Disposable {
   refresh(): Promise<void>;
   clearCache(): void;
   readonly onTargetsChanged: vscode.Event<void>;
+}
+
+// ============================================================================
+// Recording Provider Types
+// ============================================================================
+
+export type RecordingTreeItemType = 'target-group' | 'recording' | 'loading' | 'error';
+
+export interface RecordingTreeItemData {
+  type: RecordingTreeItemType;
+  id: string;
+  label: string;
+  description?: string;
+  tooltip?: string;
+  targetId?: string;
+  targetName?: string;
+  recording?: SessionRecording;
+}
+
+export interface IRecordingProvider extends vscode.TreeDataProvider<RecordingTreeItemData>, vscode.Disposable {
+  refresh(): void;
+  /**
+   * Initialize event subscriptions (for lazy initialization)
+   * Should be called after construction when all dependencies are ready
+   */
+  initialize(): void;
+}
+
+/**
+ * Recording Service interface for dependency injection and testing
+ */
+export interface IRecordingService extends vscode.Disposable {
+  getRecordings(scopeId: string, forceRefresh?: boolean): Promise<SessionRecording[]>;
+  getRecordingById(id: string): Promise<SessionRecording | undefined>;
+  groupRecordingsByTarget(recordings: SessionRecording[]): Map<string, SessionRecording[]>;
+  refresh(): Promise<void>;
+  clearCache(): void;
+  readonly onRecordingsChanged: vscode.Event<void>;
 }
 
 // ============================================================================

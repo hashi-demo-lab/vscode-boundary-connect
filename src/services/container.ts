@@ -16,6 +16,7 @@ import {
   IBoundaryCLI,
   IConfigurationService,
   IConnectionManager,
+  IRecordingService,
   IStatusBarManager,
   ITargetService,
 } from '../types';
@@ -30,6 +31,7 @@ export interface IServiceContainer {
   readonly authState: IAuthStateManager;
   readonly auth: IAuthManager;
   readonly targets: ITargetService;
+  readonly recordings: IRecordingService;
   readonly connections: IConnectionManager;
   readonly statusBar: IStatusBarManager;
 }
@@ -43,6 +45,7 @@ export interface ServiceFactories {
   authState: () => IAuthStateManager;
   auth: (context: vscode.ExtensionContext, cli: IBoundaryCLI, authState: IAuthStateManager) => IAuthManager;
   targets: (cli: IBoundaryCLI) => ITargetService;
+  recordings: (cli: IBoundaryCLI) => IRecordingService;
   connections: (cli: IBoundaryCLI, context: vscode.ExtensionContext) => IConnectionManager;
   statusBar: () => IStatusBarManager;
 }
@@ -63,6 +66,7 @@ export function createServiceContainer(
   let _authState: IAuthStateManager | undefined;
   let _auth: IAuthManager | undefined;
   let _targets: ITargetService | undefined;
+  let _recordings: IRecordingService | undefined;
   let _connections: IConnectionManager | undefined;
   let _statusBar: IStatusBarManager | undefined;
 
@@ -104,6 +108,13 @@ export function createServiceContainer(
       return _targets;
     },
 
+    get recordings(): IRecordingService {
+      if (!_recordings) {
+        _recordings = factories.recordings(this.cli);
+      }
+      return _recordings;
+    },
+
     get connections(): IConnectionManager {
       if (!_connections) {
         _connections = factories.connections(this.cli, context);
@@ -128,6 +139,7 @@ export function disposeServiceContainer(container: IServiceContainer): void {
   const disposables = [
     container.connections,
     container.statusBar,
+    container.recordings,
     container.targets,
     container.auth,
     container.authState,

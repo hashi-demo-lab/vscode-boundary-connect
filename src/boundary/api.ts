@@ -13,6 +13,7 @@ import {
   BoundaryTarget,
   BoundaryAuthMethod,
   SessionAuthorization,
+  SessionRecording,
   BrokeredCredential,
   IConfigurationService,
 } from '../types';
@@ -123,6 +124,37 @@ interface ApiSessionAuth {
         };
       };
     };
+  }>;
+}
+
+/**
+ * Session recording from API response
+ */
+interface ApiSessionRecording {
+  id: string;
+  scope_id: string;
+  storage_bucket_id?: string;
+  target_id?: string;
+  user_id?: string;
+  session_id?: string;
+  created_time: string;
+  updated_time?: string;
+  duration?: string;
+  state?: string;
+  byte_count?: number;
+  mime_type?: string;
+  authorized_actions?: string[];
+  // Detailed session recording includes connection/channel recordings
+  connection_recordings?: Array<{
+    channel_recordings?: Array<{
+      id: string;
+      bytes_up?: number;
+      bytes_down?: number;
+      start_time?: string;
+      end_time?: string;
+      duration?: string;
+      mime_types?: string[];
+    }>;
   }>;
 }
 
@@ -374,6 +406,89 @@ export class BoundaryAPI {
   }
 
   /**
+   * List session recordings from a scope
+   */
+  async listSessionRecordings(scopeId: string): Promise<SessionRecording[]> {
+    logger.debug(`API: Listing session recordings from ${scopeId}`);
+    const startTime = Date.now();
+
+    try {
+      const response = await this.request<ApiResponse<ApiSessionRecording>>(
+        'GET',
+        `/v1/session-recordings?scope_id=${encodeURIComponent(scopeId)}`
+      );
+
+      const recordings = (response.items || []).map(this.mapApiSessionRecording);
+      logger.debug(`API: Listed ${recordings.length} session recordings in ${Date.now() - startTime}ms`);
+      return recordings;
+    } catch (err) {
+      logger.error(`API: Failed to list session recordings:`, err);
+      throw err;
+    }
+  }
+
+  /**
+   * Get session recording details including channel recordings
+   * @param recordingId - Session recording ID (sr_...)
+   * @returns First channel recording ID (chr_...) or null if none found
+   */
+  async getSessionRecordingChannelId(recordingId: string): Promise<string | null> {
+    logger.debug(`API: Getting channel ID for session recording ${recordingId}`);
+    const startTime = Date.now();
+
+    try {
+      // Note: GET /v1/session-recordings/{id} returns the recording directly, not wrapped in { item: ... }
+      const recording = await this.request<ApiSessionRecording>(
+        'GET',
+        `/v1/session-recordings/${encodeURIComponent(recordingId)}`
+      );
+
+      logger.debug(`API: Connection recordings count: ${recording.connection_recordings?.length || 0}`);
+
+      if (recording.connection_recordings) {
+        recording.connection_recordings.forEach((conn, i) => {
+          logger.debug(`API: Connection ${i} has ${conn.channel_recordings?.length || 0} channel recordings`);
+          if (conn.channel_recordings) {
+            conn.channel_recordings.forEach((ch, j) => {
+              logger.debug(`API: Channel ${i}-${j}: ${ch.id}, mime_types: ${ch.mime_types?.join(', ') || 'none'}`);
+            });
+          }
+        });
+      }
+
+      // Find the first channel recording with asciicast mime type
+      let channelId: string | null = null;
+
+      for (const conn of recording.connection_recordings || []) {
+        for (const ch of conn.channel_recordings || []) {
+          // Prefer channels with asciicast mime type
+          if (ch.mime_types?.includes('application/x-asciicast')) {
+            channelId = ch.id;
+            logger.info(`API: Found asciicast channel ${channelId}`);
+            break;
+          }
+          // Fallback to first channel with data
+          if (!channelId && (ch.bytes_up || ch.bytes_down)) {
+            channelId = ch.id;
+          }
+        }
+        if (channelId) break;
+      }
+
+      if (!channelId) {
+        logger.warn(`No channel recordings found for session recording ${recordingId}`);
+        return null;
+      }
+
+      logger.debug(`API: Found channel ID ${channelId} in ${Date.now() - startTime}ms`);
+      return channelId;
+    } catch (err) {
+      logger.error(`API: Failed to get session recording details:`, err);
+      throw err;
+    }
+  }
+
+  /**
    * Map API scope to internal type
    */
   private mapApiScope = (apiScope: ApiScope): BoundaryScope => {
@@ -467,4 +582,25 @@ export class BoundaryAPI {
       };
     });
   }
+
+  /**
+   * Map API session recording to internal type
+   */
+  private mapApiSessionRecording = (apiRecording: ApiSessionRecording): SessionRecording => {
+    return {
+      id: apiRecording.id,
+      scopeId: apiRecording.scope_id,
+      storageBucketId: apiRecording.storage_bucket_id,
+      targetId: apiRecording.target_id,
+      userId: apiRecording.user_id,
+      sessionId: apiRecording.session_id,
+      createdTime: apiRecording.created_time,
+      updatedTime: apiRecording.updated_time,
+      duration: apiRecording.duration,
+      state: apiRecording.state,
+      byteCount: apiRecording.byte_count,
+      mimeType: apiRecording.mime_type,
+      authorizedActions: apiRecording.authorized_actions || [],
+    };
+  };
 }

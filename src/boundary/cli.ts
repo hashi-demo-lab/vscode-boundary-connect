@@ -18,6 +18,7 @@ import {
   IBoundaryCLI,
   PasswordCredentials,
   SessionAuthorization,
+  SessionRecording,
   TokenResult,
 } from '../types';
 import { generateConnectionId } from '../utils/id';
@@ -457,6 +458,12 @@ export class BoundaryCLI implements IBoundaryCLI {
     return this.api.listScopes(parentScopeId || 'global');
   }
 
+  async listSessionRecordings(scopeId: string): Promise<SessionRecording[]> {
+    // Use API for faster queries
+    await this.ensureApiToken();
+    return this.api.listSessionRecordings(scopeId);
+  }
+
   /**
    * List targets from a specific scope (uses API for speed)
    */
@@ -870,6 +877,52 @@ export class BoundaryCLI implements IBoundaryCLI {
         BoundaryErrorCode.CLI_EXECUTION_FAILED,
         error
       );
+    }
+  }
+
+  /**
+   * Download a session recording in asciicast format
+   * @param recordingId - Session recording ID
+   * @returns Promise resolving to asciicast JSON string
+   */
+  async downloadRecording(recordingId: string): Promise<string> {
+    logger.info(`Downloading session recording ${recordingId} in asciicast format`);
+
+    try {
+      // First, get the channel recording ID from the session recording
+      // Session recordings (sr_...) contain channel recordings (chr_...)
+      // The download command requires a channel recording ID
+      await this.ensureApiToken();
+      const channelId = await this.api.getSessionRecordingChannelId(recordingId);
+
+      if (!channelId) {
+        throw new BoundaryError(
+          `No channel recordings found for session recording ${recordingId}`,
+          BoundaryErrorCode.CLI_EXECUTION_FAILED
+        );
+      }
+
+      logger.info(`Found channel recording ${channelId} for session recording ${recordingId}`);
+
+      // Download the channel recording to stdout using -output - flag
+      // Boundary CLI outputs recordings in asciicast (.cast) format by default
+      const args = [
+        'session-recordings',
+        'download',
+        '-id',
+        channelId,
+        '-output',
+        '-',
+      ];
+
+      const startTime = Date.now();
+      const result = await this.execute(args);
+      logger.info(`Downloaded channel recording ${channelId} in ${Date.now() - startTime}ms`);
+
+      return result.stdout;
+    } catch (error) {
+      logger.error(`Failed to download recording ${recordingId}:`, error);
+      throw error;
     }
   }
 
