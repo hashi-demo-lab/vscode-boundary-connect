@@ -199,6 +199,32 @@ describe('BoundaryAPI', () => {
         code: BoundaryErrorCode.AUTH_FAILED,
       });
     });
+
+    it('should allow unauthenticated requests when flag is set', async () => {
+      api.setToken(undefined);
+
+      const mockReq = createMockRequest();
+      const mockRes = createMockResponse(200, {
+        items: [
+          {
+            id: 'o_org123',
+            scope_id: 'global',
+            name: 'Test Org',
+            type: 'org',
+            scope: { id: 'global', type: 'global' },
+          },
+        ],
+      });
+
+      mockHttpsRequest.mockImplementation((options, callback) => {
+        callback(mockRes);
+        return mockReq;
+      });
+
+      const scopes = await api.listScopes('global', true);
+      expect(scopes).toHaveLength(1);
+      expect(scopes[0].id).toBe('o_org123');
+    });
   });
 
   describe('listTargets', () => {

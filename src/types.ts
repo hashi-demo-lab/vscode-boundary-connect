@@ -176,7 +176,7 @@ export interface IBoundaryCLI extends vscode.Disposable {
   getToken(): Promise<TokenResult>;
   listAuthMethods(scopeId?: string): Promise<BoundaryAuthMethod[]>;
   listTargets(scopeId?: string, recursive?: boolean): Promise<BoundaryTarget[]>;
-  listScopes(parentScopeId?: string): Promise<BoundaryScope[]>;
+  listScopes(parentScopeId?: string, allowUnauthenticated?: boolean): Promise<BoundaryScope[]>;
   authorizeSession(targetId: string): Promise<SessionAuthorization>;
   connect(targetId: string, options?: ConnectOptions): Promise<Connection>;
 }

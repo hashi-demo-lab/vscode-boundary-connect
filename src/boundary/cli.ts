@@ -446,8 +446,9 @@ export class BoundaryCLI implements IBoundaryCLI {
     logger.info(`Found ${globalMethods.length} auth methods in global scope`);
 
     // Then, discover org scopes and get their auth methods
+    // Allow unauthenticated since this runs during the login flow before the user has a token
     try {
-      const orgScopes = await this.listScopes('global');
+      const orgScopes = await this.listScopes('global', true);
       logger.info(`Found ${orgScopes.length} org scopes to search`);
 
       for (const org of orgScopes) {
@@ -465,10 +466,10 @@ export class BoundaryCLI implements IBoundaryCLI {
     return allAuthMethods;
   }
 
-  async listScopes(parentScopeId?: string): Promise<BoundaryScope[]> {
+  async listScopes(parentScopeId?: string, allowUnauthenticated = false): Promise<BoundaryScope[]> {
     // Use API for faster queries
     await this.ensureApiToken();
-    return this.api.listScopes(parentScopeId || 'global');
+    return this.api.listScopes(parentScopeId || 'global', allowUnauthenticated);
   }
 
   /**

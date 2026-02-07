@@ -268,14 +268,16 @@ export class BoundaryAPI {
   /**
    * List scopes from a parent scope
    */
-  async listScopes(parentScopeId: string = 'global'): Promise<BoundaryScope[]> {
+  async listScopes(parentScopeId: string = 'global', allowUnauthenticated = false): Promise<BoundaryScope[]> {
     logger.debug(`API: Listing scopes from ${parentScopeId}`);
     const startTime = Date.now();
 
     try {
       const response = await this.request<ApiResponse<ApiScope>>(
         'GET',
-        `/v1/scopes?scope_id=${encodeURIComponent(parentScopeId)}`
+        `/v1/scopes?scope_id=${encodeURIComponent(parentScopeId)}`,
+        undefined,
+        allowUnauthenticated
       );
 
       const scopes = (response.items || []).map(this.mapApiScope);
