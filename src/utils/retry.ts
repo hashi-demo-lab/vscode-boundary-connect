@@ -112,7 +112,7 @@ export async function withRetry<T>(
     operationName = 'operation',
   } = options;
 
-  let lastError: Error | undefined;
+  let lastError: Error = new Error(`${operationName} failed`);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {

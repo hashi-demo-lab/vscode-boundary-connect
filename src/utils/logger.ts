@@ -114,10 +114,10 @@ export class Logger {
             const sanitized = sanitizeForLogging(arg);
             return JSON.stringify(sanitized, null, 2);
           } catch {
-            return String(arg);
+            return arg instanceof Error ? arg.message : JSON.stringify(arg);
           }
         }
-        return String(arg);
+        return arg instanceof Error ? arg.message : JSON.stringify(arg);
       }).join(' ');
     }
 
