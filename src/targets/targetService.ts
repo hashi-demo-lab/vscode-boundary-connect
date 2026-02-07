@@ -231,11 +231,9 @@ export class TargetService implements ITargetService {
 
       // Note: listTargets() now auto-discovers all accessible targets
       const targets = await this.cli.listTargets();
+      this.updateCache(targets);
 
-      this.targetsCache.set(scopeId, targets);
-      this.lastFetchTime = Date.now();
-
-      return [...targets]; // Return all targets
+      return [...(this.targetsCache.get(scopeId) || [])];
     } catch (error) {
       logger.error(`Failed to fetch targets for scope ${scopeId}:`, error);
       throw error;

@@ -53,7 +53,11 @@ export class AuthManager implements IAuthManager {
       return this.initPromise;
     }
 
-    this.initPromise = this.doInitialize();
+    this.initPromise = this.doInitialize().catch((error) => {
+      // Clear cached promise so initialization can be retried
+      this.initPromise = undefined;
+      throw error;
+    });
     return this.initPromise;
   }
 
@@ -195,6 +199,11 @@ export class AuthManager implements IAuthManager {
 
     if (result.status === 'found') {
       return result.token;
+    }
+
+    // Token not in keyring but state says authenticated — sync state
+    if (result.status === 'not_found') {
+      this.stateManager.dispatch({ type: 'TOKEN_EXPIRED' });
     }
 
     if (result.status === 'cli_error') {

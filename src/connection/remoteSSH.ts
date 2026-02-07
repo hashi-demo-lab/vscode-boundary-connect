@@ -204,8 +204,7 @@ async function ensureSSHConfigEntry(options: RemoteSSHConnectionOptions & { targ
 
   // Check if this exact host alias already exists and update or append
   const hostRegex = new RegExp(
-    `\\n?${BOUNDARY_SSH_CONFIG_MARKER}\\n[^]*?Host ${hostAlias}\\n[^]*?(?=\\n${BOUNDARY_SSH_CONFIG_MARKER}|\\nHost |$)`,
-    'g'
+    `\\n?${BOUNDARY_SSH_CONFIG_MARKER}\\n[^]*?Host ${hostAlias}\\n[^]*?(?=\\n${BOUNDARY_SSH_CONFIG_MARKER}|\\nHost |$)`
   );
 
   if (hostRegex.test(existingConfig)) {
@@ -235,8 +234,7 @@ export async function removeBoundarySSHConfigEntry(port: number, targetName?: st
 
     // Remove the specific entry for this host alias
     const entryRegex = new RegExp(
-      `\\n?${BOUNDARY_SSH_CONFIG_MARKER}\\n[^]*?Host ${hostAlias}\\n[^]*?(?=\\n${BOUNDARY_SSH_CONFIG_MARKER}|\\nHost |$)`,
-      'g'
+      `\\n?${BOUNDARY_SSH_CONFIG_MARKER}\\n[^]*?Host ${hostAlias}\\n[^]*?(?=\\n${BOUNDARY_SSH_CONFIG_MARKER}|\\nHost |$)`
     );
 
     const newConfig = config.replace(entryRegex, '');

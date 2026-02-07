@@ -7,6 +7,7 @@ import { AuthResult, BoundaryAuthMethod, IAuthManager, OidcCredentials } from '.
 import { getBoundaryCLI } from '../boundary/cli';
 import { getConfigurationService } from '../utils/config';
 import { logger } from '../utils/logger';
+import { executePasswordAuth } from './passwordAuth';
 
 export interface OidcAuthOptions {
   authMethodId?: string;
@@ -319,8 +320,7 @@ export async function executeOidcAuth(
       if (passwordMethods.length === 1) {
         // Single password method - go directly to password login
         logger.info('Single password method available, redirecting to password login...');
-        await vscode.commands.executeCommand('boundary.loginPassword');
-        return { success: true };
+        return executePasswordAuth(authManager);
       }
 
       // Multiple methods or mixed - show picker
@@ -331,11 +331,9 @@ export async function executeOidcAuth(
       }
 
       if (selected.type === 'password') {
-        // User selected password auth - invoke password login command
+        // User selected password auth - call directly to get actual result
         logger.info('User selected password auth method, redirecting...');
-        await vscode.commands.executeCommand('boundary.loginPassword');
-        // Return success since the password command will handle the actual auth
-        return { success: true };
+        return executePasswordAuth(authManager);
       }
 
       authMethodId = selected.id;

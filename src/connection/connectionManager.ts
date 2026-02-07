@@ -5,6 +5,7 @@
 import * as vscode from 'vscode';
 import { BoundaryTarget, BrokeredCredential, IBoundaryCLI, IConnectionManager, Session } from '../types';
 import { getBoundaryCLI } from '../boundary/cli';
+import { BoundaryError, BoundaryErrorCode } from '../utils/errors';
 import { logger } from '../utils/logger';
 import { createSession, terminateSession } from './session';
 import { triggerRemoteSSH, removeBoundarySSHConfigEntry } from './remoteSSH';
@@ -17,6 +18,7 @@ export class ConnectionManager implements IConnectionManager {
   readonly onSessionsChanged = this._onSessionsChanged.event;
 
   private sessions: Map<string, Session> = new Map();
+  private connectingTargets = new Set<string>();
   private globalState: vscode.Memento | undefined;
   private readonly cli: IBoundaryCLI;
 
@@ -39,6 +41,21 @@ export class ConnectionManager implements IConnectionManager {
   }
 
   async connect(target: BoundaryTarget): Promise<Session> {
+    if (this.connectingTargets.has(target.id)) {
+      throw new BoundaryError(
+        `Connection to ${target.name} is already in progress`,
+        BoundaryErrorCode.CONNECTION_FAILED
+      );
+    }
+    this.connectingTargets.add(target.id);
+    try {
+      return await this.doConnect(target);
+    } finally {
+      this.connectingTargets.delete(target.id);
+    }
+  }
+
+  private async doConnect(target: BoundaryTarget): Promise<Session> {
     logger.info(`Connecting to target: ${target.name} (${target.id})`);
 
     // First, try to get session authorization to check for brokered credentials
@@ -53,13 +70,11 @@ export class ConnectionManager implements IConnectionManager {
       logger.debug('authorize-session response:', {
         hasCredentials: !!authz.credentials,
         credentialCount: authz.credentials?.length,
-        credentialsRaw: JSON.stringify(authz.credentials, null, 2)
       });
       if (authz.credentials && authz.credentials.length > 0) {
         brokeredCredentials = authz.credentials;
         // Use credentials from first brokered credential
         const cred = brokeredCredentials[0];
-        logger.debug('First credential object:', JSON.stringify(cred, null, 2));
         logger.debug('Credential field check:', {
           hasCredential: !!cred.credential,
           hasUsername: !!cred.credential?.username,

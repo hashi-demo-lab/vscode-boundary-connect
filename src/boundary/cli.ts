@@ -31,6 +31,7 @@ import {
   parseAuthResponse,
 } from './parser';
 import { BoundaryAPI } from './api';
+import { validateTargetId, validateAuthMethodId, validateUsername } from '../utils/validation';
 
 const execFileAsync = promisify(execFile);
 
@@ -85,7 +86,11 @@ export class BoundaryCLI implements IBoundaryCLI {
       if (tokenResult.status === 'found') {
         this.cachedToken = tokenResult.token;
         this.api.setToken(tokenResult.token);
+      } else if (tokenResult.status === 'cli_error') {
+        logger.warn('Cannot set API token: CLI error -', tokenResult.error);
       }
+      // status 'not_found' is expected when user is not authenticated
+      // API calls will proceed without token (allowUnauthenticated) or fail with AUTH_FAILED
     } else {
       this.api.setToken(this.cachedToken);
     }
@@ -240,6 +245,12 @@ export class BoundaryCLI implements IBoundaryCLI {
 
     if (method === 'password' && credentials) {
       const pwdCreds = credentials as PasswordCredentials;
+      if (!validateAuthMethodId(pwdCreds.authMethodId)) {
+        throw new BoundaryError(`Invalid auth method ID format: ${pwdCreds.authMethodId}`, BoundaryErrorCode.CLI_EXECUTION_FAILED);
+      }
+      if (!validateUsername(pwdCreds.loginName)) {
+        throw new BoundaryError(`Invalid login name format: ${pwdCreds.loginName}`, BoundaryErrorCode.CLI_EXECUTION_FAILED);
+      }
       args.push('-auth-method-id', pwdCreds.authMethodId);
       args.push('-login-name', pwdCreds.loginName);
       // Password is passed via environment variable to avoid exposure in process listings
@@ -259,6 +270,9 @@ export class BoundaryCLI implements IBoundaryCLI {
       // Only add auth method ID if provided (some servers auto-select primary)
       const oidcCreds = credentials as { authMethodId?: string } | undefined;
       if (oidcCreds?.authMethodId) {
+        if (!validateAuthMethodId(oidcCreds.authMethodId)) {
+          throw new BoundaryError(`Invalid auth method ID format: ${oidcCreds.authMethodId}`, BoundaryErrorCode.CLI_EXECUTION_FAILED);
+        }
         args.push('-auth-method-id', oidcCreds.authMethodId);
       }
     }
@@ -280,7 +294,7 @@ export class BoundaryCLI implements IBoundaryCLI {
       const result = await this.execute(args, timeout);
       logger.info('=== CLI AUTHENTICATE SUCCESS ===');
       logger.info('Auth command completed successfully');
-      logger.debug('Auth result stdout:', result.stdout.substring(0, 500));
+      logger.debug('Auth result stdout length:', result.stdout.length);
       // Clear cached token so we fetch the new one for API calls
       this.clearCachedToken();
       return parseAuthResponse(result.stdout);
@@ -497,9 +511,13 @@ export class BoundaryCLI implements IBoundaryCLI {
     logger.info('Discovering all accessible targets...');
     const allTargets: BoundaryTarget[] = [];
     const seenIds = new Set<string>();
+    let anySuccess = false;
 
     // Helper to add targets without duplicates
     const addTargets = (targets: BoundaryTarget[]) => {
+      if (targets.length > 0) {
+        anySuccess = true;
+      }
       for (const target of targets) {
         if (!seenIds.has(target.id)) {
           seenIds.add(target.id);
@@ -582,6 +600,10 @@ export class BoundaryCLI implements IBoundaryCLI {
       }
     }
 
+    if (!anySuccess && allTargets.length === 0) {
+      logger.error('Target discovery failed: no scopes were accessible. Check network connectivity and authentication.');
+    }
+
     logger.info(`Total targets discovered: ${allTargets.length}`);
     return allTargets;
   }
@@ -593,6 +615,10 @@ export class BoundaryCLI implements IBoundaryCLI {
   }
 
   async connect(targetId: string, options: ConnectOptions = {}): Promise<Connection> {
+    if (!validateTargetId(targetId)) {
+      throw new BoundaryError(`Invalid target ID format: ${targetId}`, BoundaryErrorCode.CLI_EXECUTION_FAILED);
+    }
+
     // Ensure CLI path is resolved before spawning process
     await this.ensureCliPath();
 
@@ -611,8 +637,13 @@ export class BoundaryCLI implements IBoundaryCLI {
       args.push('-listen-addr', options.listenAddr);
     }
 
+    // Build env before spawn - may need custom env for authzToken
+    const connectEnv = this.getCliEnv();
+
     if (options.authzToken) {
-      args.push('-authz-token', options.authzToken);
+      // Pass via env var to avoid exposure in process listings (same pattern as password)
+      connectEnv.BOUNDARY_CONNECT_AUTHZ_TOKEN = options.authzToken;
+      args.push('-authz-token', 'env://BOUNDARY_CONNECT_AUTHZ_TOKEN');
     }
 
     return new Promise((resolve, reject) => {
@@ -620,7 +651,7 @@ export class BoundaryCLI implements IBoundaryCLI {
       logger.info(`Starting boundary connect for target ${targetId}`);
 
       const child = spawn(this.cliPath, args, {
-        env: this.getCliEnv(),
+        env: connectEnv,
       });
 
       this.activeProcesses.set(sessionId, child);
@@ -792,7 +823,8 @@ export class BoundaryCLI implements IBoundaryCLI {
     // Check for token expiration
     if (lowerMessage.includes('expired') ||
         lowerMessage.includes('session has ended') ||
-        lowerMessage.includes('token')) {
+        lowerMessage.includes('token expired') ||
+        lowerMessage.includes('token is expired')) {
       return BoundaryErrorCode.TOKEN_EXPIRED;
     }
 
@@ -833,7 +865,6 @@ export class BoundaryCLI implements IBoundaryCLI {
       if (error && typeof error === 'object' && 'code' in error) {
         const execError = error as { code: number | string; stdout?: string; stderr?: string; message: string };
         logger.error(`CLI exit code: ${execError.code}`);
-        logger.error(`CLI stdout: ${execError.stdout?.substring(0, 500) || '(empty)'}`);
         logger.error(`CLI stderr: ${execError.stderr?.substring(0, 500) || '(empty)'}`);
 
         // Check if it's a "command not found" error

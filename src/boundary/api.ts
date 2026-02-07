@@ -209,10 +209,19 @@ export class BoundaryAPI {
 
         res.on('end', () => {
           try {
-            if (res.statusCode === 401 || res.statusCode === 403) {
+            if (res.statusCode === 401) {
               reject(new BoundaryError(
                 'Authentication failed. Please log in again.',
                 BoundaryErrorCode.AUTH_FAILED
+              ));
+              return;
+            }
+
+            if (res.statusCode === 403) {
+              const errorBody = data ? JSON.parse(data) as { message?: string } : {};
+              reject(new BoundaryError(
+                errorBody.message || 'Permission denied. You do not have access to this resource.',
+                BoundaryErrorCode.CLI_EXECUTION_FAILED
               ));
               return;
             }
@@ -239,13 +248,13 @@ export class BoundaryAPI {
         logger.error('API request error:', err);
         reject(new BoundaryError(
           `API request failed: ${err.message}`,
-          BoundaryErrorCode.CLI_NOT_FOUND
+          BoundaryErrorCode.CONNECTION_FAILED
         ));
       });
 
       req.on('timeout', () => {
         req.destroy();
-        reject(new BoundaryError('API request timed out', BoundaryErrorCode.CLI_EXECUTION_FAILED));
+        reject(new BoundaryError('API request timed out', BoundaryErrorCode.TIMEOUT));
       });
 
       if (body) {

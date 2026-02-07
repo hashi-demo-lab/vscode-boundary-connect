@@ -178,7 +178,7 @@ describe('BoundaryAPI', () => {
       });
     });
 
-    it('should throw AUTH_FAILED on 403 response', async () => {
+    it('should throw CLI_EXECUTION_FAILED on 403 response', async () => {
       const mockReq = createMockRequest();
       const mockRes = createMockResponse(403, { message: 'Forbidden' });
 
@@ -188,7 +188,7 @@ describe('BoundaryAPI', () => {
       });
 
       await expect(api.listScopes('global')).rejects.toMatchObject({
-        code: BoundaryErrorCode.AUTH_FAILED,
+        code: BoundaryErrorCode.CLI_EXECUTION_FAILED,
       });
     });
 
@@ -546,7 +546,7 @@ describe('BoundaryAPI', () => {
       });
 
       await expect(api.listScopes('global')).rejects.toMatchObject({
-        code: BoundaryErrorCode.CLI_NOT_FOUND,
+        code: BoundaryErrorCode.CONNECTION_FAILED,
       });
     });
 
